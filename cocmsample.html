@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Donation Flow & COCM Visualizations</title>
+    <style>
+        /* シンプルなスタイル（Tailwind風） */
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+        }
+
+        .p-6 {
+            padding: 1.5rem;
+        }
+
+        .text-xl {
+            font-size: 1.25rem;
+        }
+
+        .text-3xl {
+            font-size: 2rem;
+        }
+
+        .text-2xl {
+            font-size: 1.5rem;
+        }
+
+        .font-bold {
+            font-weight: bold;
+        }
+
+        .mb-4 {
+            margin-bottom: 1rem;
+        }
+
+        .mt-6 {
+            margin-top: 1.5rem;
+        }
+
+        .flex {
+            display: flex;
+        }
+
+        .space-x-4>*:not(:last-child) {
+            margin-right: 1rem;
+        }
+
+        .grid {
+            display: grid;
+        }
+
+        .grid-cols-2 {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .gap-4 {
+            gap: 1rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 0.5rem;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #ccc;
+        }
+
+        th,
+        td {
+            padding: 5px;
+            text-align: center;
+        }
+
+        input {
+            margin-left: 5px;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+        }
+
+        /* 分析グラフ用の枠 */
+        .chart-container {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <!-- ライブラリ読み込み -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/numeric/1.2.6/numeric.min.js"></script>
+
+    <!-- メインの React コンポーネント -->
+    <script type="text/babel">
+        /***********************
+             * 寄付データ生成関数
+             * ※ 寄付金額は 100 円単位。10% の確率で高額寄付が発生する
+             ***********************/
+        const generateDonations = (numDonors, numProjects) => {
+            const donors = Array.from({ length: numDonors }, (_, i) => `Donor ${i + 1}`);
+            const projects = Array.from({ length: numProjects }, (_, i) => `Project ${i + 1}`);
+            let links = [];
+            let tableData = donors.reduce((acc, donor) => {
+                acc[donor] = projects.reduce((projAcc, project) => {
+                    projAcc[project] = 0;
+                    return projAcc;
+                }, {});
+                return acc;
+            }, {});
+            let projectTotals = projects.reduce((acc, project) => {
+                acc[project] = 0;
+                return acc;
+            }, {});
+
+            donors.forEach((donor) => {
+                const donationCount = Math.floor(Math.random() * 3) + 1;
+                const selectedProjects = new Set();
+                while (selectedProjects.size < donationCount) {
+                    selectedProjects.add(projects[Math.floor(Math.random() * projects.length)]);
+                }
+                selectedProjects.forEach((project) => {
+                    // 10% の確率で高額寄付（10,000〜100,000円）、それ以外は 100〜10,000 円
+                    const amount =
+                        Math.random() < 0.1
+                            ? (Math.floor(Math.random() * 901) + 100) * 100
+                            : (Math.floor(Math.random() * 100) + 1) * 100;
+                    links.push({ source: donor, target: project, value: amount });
+                    tableData[donor][project] = amount;
+                    projectTotals[project] += amount;
+                });
+            });
+            return {
+                nodes: [...donors.map(d => ({ id: d })), ...projects.map(p => ({ id: p }))],
+                links,
+                tableData,
+                projectTotals
+            };
+        };
+
+        /***********************
+         * 3Dクラスタリング用データ生成（基本的には generateDonations と同じデータを利用）
+         ***********************/
+        const generateRandomData = (numDonors = 50, numProjects = 4) => {
+            // 同じく 100 円単位で生成
+            const donors = Array.from({ length: numDonors }, (_, i) => `Donor ${i + 1}`);
+            const projects = Array.from({ length: numProjects }, (_, i) => `Project ${i + 1}`);
+            let data = [];
+            let tableData = {};
+            let projectTotals = {};
+            projects.forEach(p => (projectTotals[p] = 0));
+            donors.forEach((donor) => {
+                tableData[donor] = {};
+                projects.forEach(project => (tableData[donor][project] = 0));
+                const donationCount = Math.floor(Math.random() * 3) + 1;
+                const selectedProjects = new Set();
+                while (selectedProjects.size < donationCount) {
+                    selectedProjects.add(projects[Math.floor(Math.random() * projects.length)]);
+                }
+                selectedProjects.forEach(project => {
+                    const amount =
+                        Math.random() < 0.1
+                            ? (Math.floor(Math.random() * 901) + 100) * 100
+                            : (Math.floor(Math.random() * 100) + 1) * 100;
+                    data.push([
+                        Math.floor(Math.random() * 1001),
+                        Math.floor(Math.random() * 1001),
+                        Math.floor(Math.random() * 1001),
+                        amount
+                    ]);
+                    tableData[donor][project] = amount;
+                    projectTotals[project] += amount;
+                });
+            });
+            return { data, tableData, projectTotals };
+        };
+
+        /***********************
+         * k-means クラスタリング（常に k = 3）
+         ***********************/
+        const kMeansClustering = (data, k = 3) => {
+            let centroids = data.slice(0, k);
+            let clusters;
+            let change = true;
+            while (change) {
+                clusters = Array.from({ length: k }, () => []);
+                data.forEach(point => {
+                    let minDist = Infinity, clusterIndex = 0;
+                    centroids.forEach((centroid, i) => {
+                        const dist = Math.sqrt(
+                            centroid.reduce((sum, c, j) => sum + Math.pow(point[j] - c, 2), 0)
+                        );
+                        if (dist < minDist) {
+                            minDist = dist;
+                            clusterIndex = i;
+                        }
+                    });
+                    clusters[clusterIndex].push(point);
+                });
+                const newCentroids = clusters.map(cluster =>
+                    cluster[0].map((_, i) =>
+                        cluster.reduce((sum, point) => sum + point[i], 0) / cluster.length
+                    )
+                );
+                change = JSON.stringify(newCentroids) !== JSON.stringify(centroids);
+                centroids = newCentroids;
+            }
+            return clusters;
+        };
+
+        /***********************
+         * 寄付者ごとのクラスタリング（クラスタ割り当てを返す、常に k = 3）
+         ***********************/
+        function kMeansClusteringWithAssignments(data, k = 3) {
+            let centroids = data.slice(0, k).map(pt => pt.slice());
+            let assignments = new Array(data.length).fill(0);
+            let changed = true;
+            while (changed) {
+                changed = false;
+                const newAssignments = data.map(point => {
+                    let minDist = Infinity;
+                    let clusterIndex = 0;
+                    centroids.forEach((centroid, i) => {
+                        const dist = Math.sqrt(
+                            centroid.reduce((sum, c, j) => sum + Math.pow(point[j] - c, 2), 0)
+                        );
+                        if (dist < minDist) {
+                            minDist = dist;
+                            clusterIndex = i;
+                        }
+                    });
+                    return clusterIndex;
+                });
+                for (let i = 0; i < data.length; i++) {
+                    if (newAssignments[i] !== assignments[i]) {
+                        changed = true;
+                        break;
+                    }
+                }
+                assignments = newAssignments;
+                const newCentroids = Array.from({ length: k }, () => new Array(data[0].length).fill(0));
+                const counts = new Array(k).fill(0);
+                data.forEach((point, idx) => {
+                    const cluster = assignments[idx];
+                    counts[cluster]++;
+                    point.forEach((val, j) => {
+                        newCentroids[cluster][j] += val;
+                    });
+                });
+                for (let i = 0; i < k; i++) {
+                    if (counts[i] > 0) {
+                        newCentroids[i] = newCentroids[i].map(v => v / counts[i]);
+                    }
+                }
+                centroids = newCentroids;
+            }
+            return { assignments, centroids };
+        }
+
+        /***********************
+         * PCA Projection 関数
+         * donationMatrix（2次元配列）を受け取り、2つの主成分に射影して返す
+         ***********************/
+        function pcaProjection(data, numComponents = 2) {
+            const n = data.length, d = data[0].length;
+            // 各次元の平均を計算
+            const means = [];
+            for (let j = 0; j < d; j++) {
+                let sum = 0;
+                for (let i = 0; i < n; i++) {
+                    sum += data[i][j];
+                }
+                means[j] = sum / n;
+            }
+            // 中心化
+            const centered = data.map(row => row.map((val, j) => val - means[j]));
+            // SVD を実行
+            const svd = numeric.svd(centered);
+            // V は d×d の直交行列、先頭から numComponents 列を使う
+            const V = svd.V;
+            // 射影：各行ベクトルに対して、最初の numComponents 列との内積
+            const proj = centered.map(row => {
+                const projected = [];
+                for (let i = 0; i < numComponents; i++) {
+                    let val = 0;
+                    for (let j = 0; j < d; j++) {
+                        val += row[j] * V[j][i];
+                    }
+                    projected.push(val);
+                }
+                return projected;
+            });
+            return proj;
+        }
+
+        /***********************
+         * 階層的クラスタリング（平均連結法）
+         * data: 寄付データの行列（各ドナーの寄付額ベクトル）
+         * k: 希望するクラスタ数
+         * ドナーごとのクラスタ割り当て配列を返す
+         ***********************/
+        function euclideanDistance(a, b) {
+            let sum = 0;
+            for (let i = 0; i < a.length; i++) {
+                sum += Math.pow(a[i] - b[i], 2);
+            }
+            return Math.sqrt(sum);
+        }
+
+        function hierarchicalClustering(data, k) {
+            // 各ドナーを1クラスタとして初期化
+            let clusters = data.map((_, i) => [i]);
+
+            // 2つのクラスタ間の平均距離を計算
+            const clusterDistance = (clusterA, clusterB) => {
+                let total = 0, count = 0;
+                clusterA.forEach(i => {
+                    clusterB.forEach(j => {
+                        total += euclideanDistance(data[i], data[j]);
+                        count++;
+                    });
+                });
+                return total / count;
+            };
+
+            while (clusters.length > k) {
+                let minDist = Infinity, mergeA = 0, mergeB = 1;
+                for (let i = 0; i < clusters.length; i++) {
+                    for (let j = i + 1; j < clusters.length; j++) {
+                        const dist = clusterDistance(clusters[i], clusters[j]);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            mergeA = i;
+                            mergeB = j;
+                        }
+                    }
+                }
+                // 2つのクラスタを統合
+                const mergedCluster = clusters[mergeA].concat(clusters[mergeB]);
+                // 上位にある方から順に削除
+                clusters.splice(mergeB, 1);
+                clusters.splice(mergeA, 1);
+                clusters.push(mergedCluster);
+            }
+
+            // 各ドナーにクラスタ番号を割り当てる
+            let assignments = new Array(data.length);
+            clusters.forEach((cluster, clusterIndex) => {
+                cluster.forEach(i => {
+                    assignments[i] = clusterIndex;
+                });
+            });
+            return assignments;
+        }
+
+        /***********************
+         * 距離行列を計算する関数
+         ***********************/
+        function distanceMatrix(data) {
+            const n = data.length;
+            let D = [];
+            for (let i = 0; i < n; i++) {
+                D[i] = [];
+                for (let j = 0; j < n; j++) {
+                    D[i][j] = euclideanDistance(data[i], data[j]);
+                }
+            }
+            return D;
+        }
+
+        /***********************
+         * MDS Projection 関数（古典的 MDS）
+         * data: データ行列
+         * dimensions: 射影次元数（デフォルトは 2）
+         ***********************/
+        function mdsProjection(data, dimensions = 2) {
+            const n = data.length;
+            const D = distanceMatrix(data);
+            // 各要素を二乗
+            const D2 = D.map(row => row.map(val => val * val));
+            // 二重中心化：H = I - (1/n) の行列
+            const I = numeric.identity(n);
+            const ones = numeric.rep([n, n], 1 / n);
+            const H = numeric.sub(I, ones);
+            // B = -0.5 * H * D2 * H
+            const B = numeric.dot(numeric.dot(H, numeric.mul(-0.5, D2)), H);
+            // SVD により低次元へ射影：coordinates = U * sqrt(S)
+            const svdB = numeric.svd(B);
+            let coords = [];
+            for (let i = 0; i < n; i++) {
+                coords[i] = [];
+                for (let j = 0; j < dimensions; j++) {
+                    coords[i][j] = svdB.U[i][j] * Math.sqrt(svdB.S[j]);
+                }
+            }
+            return coords;
+        }
+
+        /***********************
+         * DBSCAN Clustering 関数
+         * data: 寄付データの2次元配列
+         * epsilon: 近傍距離の閾値, minPts: コア点とみなすための最低近傍数
+         * 返り値: 各点のクラスタ割り当て（ノイズは -1）
+         ***********************/
+        function dbscanClustering(data, epsilon, minPts) {
+            const n = data.length;
+            let assignments = new Array(n).fill(undefined);
+            let visited = new Array(n).fill(false);
+            let clusterId = 0;
+
+            // 指定した点のε近傍の点のインデックスを返す
+            function regionQuery(pointIdx) {
+                let neighbors = [];
+                for (let j = 0; j < n; j++) {
+                    if (euclideanDistance(data[pointIdx], data[j]) <= epsilon) {
+                        neighbors.push(j);
+                    }
+                }
+                return neighbors;
+            }
+
+            function expandCluster(pointIdx, neighbors, clusterId) {
+                assignments[pointIdx] = clusterId;
+                let i = 0;
+                while (i < neighbors.length) {
+                    let nb = neighbors[i];
+                    if (!visited[nb]) {
+                        visited[nb] = true;
+                        const nbNeighbors = regionQuery(nb);
+                        if (nbNeighbors.length >= minPts) {
+                            // 重複なく neighbors に統合
+                            nbNeighbors.forEach(nIdx => {
+                                if (!neighbors.includes(nIdx)) {
+                                    neighbors.push(nIdx);
+                                }
+                            });
+                        }
+                    }
+                    if (assignments[nb] === undefined) {
+                        assignments[nb] = clusterId;
+                    }
+                    i++;
+                }
+            }
+
+            for (let i = 0; i < n; i++) {
+                if (!visited[i]) {
+                    visited[i] = true;
+                    const neighbors = regionQuery(i);
+                    if (neighbors.length < minPts) {
+                        assignments[i] = -1; // ノイズ
+                    } else {
+                        expandCluster(i, neighbors, clusterId);
+                        clusterId++;
+                    }
+                }
+            }
+            return assignments;
+        }
+
+        /***********************
+         * DonationVisualizer コンポーネント
+         ***********************/
+        function DonationVisualizer() {
+            // デフォルトの寄付者数は30、プロジェクト数は10
+            const [numDonors, setNumDonors] = React.useState(30);
+            const [numProjects, setNumProjects] = React.useState(10);
+            const [donationData, setDonationData] = React.useState(generateDonations(numDonors, numProjects));
+            const [refresh, setRefresh] = React.useState(0);
+            // Matching Fund のプール（調整可能）
+            const [matchingPool, setMatchingPool] = React.useState(1000000);
+
+            /***********************
+             * プロジェクト概要の計算
+             * 各プロジェクトについて、寄付総額、寄付者数、寄付内訳（例: [20,20,60]）、および QF による計算結果を求める
+             ***********************/
+            const computeProjectSummary = (pool) => {
+                const donorKeys = Object.keys(donationData.tableData || {});
+                if (donorKeys.length === 0) return { projectKeys: [], projectSummaries: [] };
+                const projectKeys = Object.keys(donationData.tableData[donorKeys[0]]);
+                const donationMatrix = donorKeys.map(donor =>
+                    projectKeys.map(project => donationData.tableData[donor][project])
+                );
+                const { assignments } = kMeansClusteringWithAssignments(donationMatrix, 3);
+                let projectSummaries = projectKeys.map((project, j) => {
+                    let totalDonation = 0;
+                    let donorCount = 0;
+                    let sumSqrt = 0;
+                    let clustersSet = new Set();
+                    let donationBreakdown = [];
+                    donationMatrix.forEach((donorRow, i) => {
+                        const amount = donorRow[j];
+                        totalDonation += amount;
+                        if (amount > 0) {
+                            donorCount++;
+                            donationBreakdown.push(amount);
+                            sumSqrt += Math.sqrt(amount);
+                            clustersSet.add(assignments[i]);
+                        }
+                    });
+                    const baseScore = Math.pow(sumSqrt, 2);
+                    const diversityFactor = clustersSet.size / 3;
+                    const newScore = baseScore * diversityFactor;
+                    return {
+                        project,
+                        totalDonation,
+                        donorCount,
+                        donationBreakdown,
+                        baseScore,
+                        diversityFactor,
+                        newScore,
+                        clusters: Array.from(clustersSet).sort().join(", ")
+                    };
+                });
+                const totalNewScore = projectSummaries.reduce((sum, p) => sum + p.newScore, 0);
+                projectSummaries = projectSummaries.map(p => ({
+                    ...p,
+                    finalMatchingFunds: totalNewScore ? (p.newScore / totalNewScore * pool) : 0
+                }));
+                return { projectKeys, projectSummaries };
+            };
+            const { projectKeys, projectSummaries } = React.useMemo(() => computeProjectSummary(matchingPool), [donationData, matchingPool]);
+
+            // --- 各種 Plotly 可視化 ---
+
+            // Sankey 図
+            React.useEffect(() => {
+                const nodes = donationData.nodes;
+                const nodeLabels = nodes.map(n => n.id);
+                const nodeMap = {};
+                nodes.forEach((n, i) => { nodeMap[n.id] = i; });
+                const linkData = donationData.links;
+                const sankeySource = linkData.map(link => nodeMap[link.source]);
+                const sankeyTarget = linkData.map(link => nodeMap[link.target]);
+                const sankeyValues = linkData.map(link => link.value);
+                const sankeyTrace = {
+                    type: "sankey",
+                    orientation: "h",
+                    node: {
+                        pad: 5,
+                        thickness: 20,
+                        line: { color: "black", width: 0.5 },
+                        label: nodeLabels
+                    },
+                    link: {
+                        source: sankeySource,
+                        target: sankeyTarget,
+                        value: sankeyValues
+                    }
+                };
+                Plotly.newPlot("sankeyDiv", [sankeyTrace], {
+                    title: "Donation Flow Sankey Diagram",
+                    font: { size: 10 },
+                    height: 500
+                });
+            }, [donationData]);
+
+            // 3D Donation Network Visualization
+            React.useEffect(() => {
+                const donorKeys = Object.keys(donationData.tableData || {});
+                if (donorKeys.length === 0) return;
+                const projectKeys = Object.keys(donationData.tableData[donorKeys[0]]);
+                const numProj = projectKeys.length;
+
+                // プロジェクトを円状に配置（XY 平面、半径 150）
+                const radius = 150;
+                const projectPositions = {};
+                projectKeys.forEach((project, index) => {
+                    const angle = (2 * Math.PI * index) / numProj;
+                    projectPositions[project] = {
+                        x: radius * Math.cos(angle),
+                        y: radius * Math.sin(angle),
+                        z: 0
+                    };
+                });
+
+                // 各寄付者は、寄付先プロジェクトの位置から重み付き平均＋ジッターで配置
+                const donorPositions = {};
+                donorKeys.forEach(donor => {
+                    const donations = donationData.tableData[donor];
+                    let total = 0, sumX = 0, sumY = 0, sumZ = 0;
+                    projectKeys.forEach(project => {
+                        const amt = donations[project];
+                        if (amt > 0) {
+                            total += amt;
+                            sumX += amt * projectPositions[project].x;
+                            sumY += amt * projectPositions[project].y;
+                            sumZ += amt * projectPositions[project].z;
+                        }
+                    });
+                    if (total > 0) {
+                        donorPositions[donor] = {
+                            x: sumX / total + (Math.random() - 0.5) * 30,
+                            y: sumY / total + (Math.random() - 0.5) * 30,
+                            z: sumZ / total + (Math.random() - 0.5) * 30
+                        };
+                    } else {
+                        donorPositions[donor] = {
+                            x: (Math.random() - 0.5) * 50,
+                            y: (Math.random() - 0.5) * 50,
+                            z: (Math.random() - 0.5) * 50
+                        };
+                    }
+                });
+
+                // プロジェクト（青）のトレース（ラベル非表示）
+                const projectTrace = {
+                    x: projectKeys.map(p => projectPositions[p].x),
+                    y: projectKeys.map(p => projectPositions[p].y),
+                    z: projectKeys.map(p => projectPositions[p].z),
+                    mode: "markers",
+                    type: "scatter3d",
+                    marker: { size: 12, color: "blue" },
+                    name: "Projects"
+                };
+
+                // 寄付者（赤）のトレース（ラベル非表示）
+                const donorTrace = {
+                    x: donorKeys.map(d => donorPositions[d].x),
+                    y: donorKeys.map(d => donorPositions[d].y),
+                    z: donorKeys.map(d => donorPositions[d].z),
+                    mode: "markers",
+                    type: "scatter3d",
+                    marker: { size: 8, color: "red" },
+                    name: "Donors"
+                };
+
+                // 寄付接続（緑の線）
+                let edgeX = [], edgeY = [], edgeZ = [];
+                donationData.links.forEach(link => {
+                    const donor = link.source;
+                    const project = link.target;
+                    if (donorPositions[donor] && projectPositions[project]) {
+                        edgeX.push(donorPositions[donor].x, projectPositions[project].x, null);
+                        edgeY.push(donorPositions[donor].y, projectPositions[project].y, null);
+                        edgeZ.push(donorPositions[donor].z, projectPositions[project].z, null);
+                    }
+                });
+                const edgeTrace = {
+                    x: edgeX,
+                    y: edgeY,
+                    z: edgeZ,
+                    mode: "lines",
+                    type: "scatter3d",
+                    line: { color: "green", width: 2 },
+                    hoverinfo: "none",
+                    name: "Donations"
+                };
+
+                Plotly.newPlot("network3dDiv", [projectTrace, donorTrace, edgeTrace], {
+                    title: "Donation Network",
+                    height: 600,
+                    scene: {
+                        aspectratio: { x: 1, y: 1, z: 1 },
+                        camera: { eye: { x: 1.5, y: 1.5, z: 1.5 } }
+                    }
+                });
+            }, [donationData]);
+
+            // --- Matching Fund プールの調整 ---
+            const handleMatchingPoolChange = (e) => {
+                setMatchingPool(Number(e.target.value));
+            };
+
+            const handleGenerate = () => {
+                setDonationData(generateDonations(numDonors, numProjects));
+                setRefresh(r => r + 1);
+            };
+
+            const donorKeys = Object.keys(donationData.tableData || {});
+            const projKeys = donorKeys.length > 0 ? Object.keys(donationData.tableData[donorKeys[0]]) : [];
+
+            /***********************
+             * 以下、追加の分析グラフ
+             ***********************/
+            // 1. バーチャート：プロジェクト別寄付総額（支援額）とマッチング額
+            React.useEffect(() => {
+                // projectSummariesを総額（支援額+マッチング額）の降順にソート
+                const sortedSummaries = [...projectSummaries].sort((a, b) => {
+                    const totalA = a.totalDonation + a.finalMatchingFunds;
+                    const totalB = b.totalDonation + b.finalMatchingFunds;
+                    return totalB - totalA;
+                });
+
+                // 設定済の配列からデータ抽出
+                const projectNames = sortedSummaries.map(p => p.project);
+                const donationTotals = sortedSummaries.map(p => p.totalDonation);
+                const matchingFunds = sortedSummaries.map(p => p.finalMatchingFunds);
+
+                const trace1 = {
+                    x: projectNames,
+                    y: donationTotals,
+                    type: "bar",
+                    name: "支援額",
+                    marker: { color: "red" }
+                };
+
+                const trace2 = {
+                    x: projectNames,
+                    y: matchingFunds,
+                    type: "bar",
+                    name: "マッチング額",
+                    marker: { color: "green" }
+                };
+
+                // 積み上げ棒グラフ(barmode: "stack")を指定
+                Plotly.newPlot("barChartDiv", [trace1, trace2], {
+                    title: "プロジェクト別寄付総額とマッチング額",
+                    barmode: "stack",
+                    yaxis: { title: "金額 (円)" }
+                });
+            }, [projectSummaries]);
+
+            // 2. ライングラフ：順位別マッチング額の配分
+            React.useEffect(() => {
+                const sorted = [...projectSummaries].sort((a, b) => (b.totalDonation + b.finalMatchingFunds) - (a.totalDonation + a.finalMatchingFunds));
+                const ranks = sorted.map((_, i) => i + 1);
+                const allocatedAmounts = sorted.map(p => p.totalDonation + p.finalMatchingFunds);
+                const trace = {
+                    x: ranks,
+                    y: allocatedAmounts,
+                    mode: "lines+markers",
+                    type: "scatter",
+                    name: "割り当て総額"
+                };
+                Plotly.newPlot("lineChartDiv", [trace], {
+                    title: "順位別割り当て総額の配分",
+                    xaxis: { title: "順位", tickmode: "linear", dtick: 1 },
+                    yaxis: { title: "割り当て総額 (円)" }
+                });
+            }, [projectSummaries]);
+
+            // 3. 累積資金配分グラフ
+            React.useEffect(() => {
+                // ソート: 総額（支援額 + マッチング額）でソート
+                const sorted = [...projectSummaries].sort((a, b) => (b.totalDonation + b.finalMatchingFunds) - (a.totalDonation + a.finalMatchingFunds));
+                const totalProjects = sorted.length;
+                const totalTotal = sorted.reduce((sum, p) => sum + (p.totalDonation + p.finalMatchingFunds), 0);
+                const totalDonation = sorted.reduce((sum, p) => sum + p.totalDonation, 0);
+                const totalMatching = sorted.reduce((sum, p) => sum + p.finalMatchingFunds, 0);
+                let cumTotal = [];
+                let cumDonation = [];
+                let cumMatching = [];
+                sorted.forEach((p, i) => {
+                    const projectTotal = p.totalDonation + p.finalMatchingFunds;
+                    if (i === 0) {
+                        cumTotal[i] = projectTotal;
+                        cumDonation[i] = p.totalDonation;
+                        cumMatching[i] = p.finalMatchingFunds;
+                    } else {
+                        cumTotal[i] = cumTotal[i - 1] + projectTotal;
+                        cumDonation[i] = cumDonation[i - 1] + p.totalDonation;
+                        cumMatching[i] = cumMatching[i - 1] + p.finalMatchingFunds;
+                    }
+                });
+                // x軸: 各プロジェクトのランクパーセンテージ
+                const xPercent = sorted.map((_, i) => ((i + 1) / totalProjects) * 100);
+                // y軸: 各系列の累積割合（%）
+                const yTotal = cumTotal.map(val => (val / totalTotal) * 100);
+                const yDonation = cumDonation.map(val => (val / totalDonation) * 100);
+                const yMatching = cumMatching.map(val => (val / totalMatching) * 100);
+                const traceTotal = {
+                    x: xPercent,
+                    y: yTotal,
+                    mode: "lines+markers",
+                    type: "scatter",
+                    name: "累積総額",
+                    line: { color: "black" }
+                };
+                const traceDonation = {
+                    x: xPercent,
+                    y: yDonation,
+                    mode: "lines+markers",
+                    type: "scatter",
+                    name: "累積支援額",
+                    line: { color: "red" }
+                };
+                const traceMatching = {
+                    x: xPercent,
+                    y: yMatching,
+                    mode: "lines+markers",
+                    type: "scatter",
+                    name: "累積マッチング額",
+                    line: { color: "green" }
+                };
+                Plotly.newPlot("cumDistDiv", [traceTotal, traceDonation, traceMatching], {
+                    title: "累積資金配分グラフ",
+                    xaxis: { title: "プロジェクトランクのパーセンテージ (%)" },
+                    yaxis: { title: "各資金に対する累積割合 (%)" }
+                });
+            }, [projectSummaries]);
+
+            // ----- 新しい K-means + PCA による 2D Donor Clustering の表示 (Social Graph Style) -----
+            React.useEffect(() => {
+                const donorKeys = Object.keys(donationData.tableData || {});
+                if (donorKeys.length === 0) return;
+                const projectKeys = Object.keys(donationData.tableData[donorKeys[0]]);
+                // 寄付マトリックスの作成
+                const donationMatrix = donorKeys.map(donor =>
+                    projectKeys.map(project => donationData.tableData[donor][project])
+                );
+                // PCA による 2次元射影
+                const pcaCoords = pcaProjection(donationMatrix, 2);
+                // K-means クラスタリング（既存の関数を利用）
+                const { assignments: kmeansAssignments } = kMeansClusteringWithAssignments(donationMatrix, 3);
+                // クラスタごとにインデックスをグループ化
+                const clusters = {};
+                kmeansAssignments.forEach((assignment, i) => {
+                    if (!clusters[assignment]) clusters[assignment] = [];
+                    clusters[assignment].push(i);
+                });
+                // 各クラスタのノードトレース作成
+                const traces = [];
+                const colors = ["red", "blue", "green", "orange", "purple"];
+                Object.keys(clusters).forEach(clusterId => {
+                    const indices = clusters[clusterId];
+                    // ジッターを追加して座標が重ならないように調整
+                    const jitter = (val) => val + (Math.random() - 0.5) * 0.2;
+                    const xs = indices.map(i => jitter(pcaCoords[i][0]));
+                    const ys = indices.map(i => jitter(pcaCoords[i][1]));
+                    traces.push({
+                        x: xs,
+                        y: ys,
+                        mode: "markers",
+                        type: "scatter",
+                        marker: { size: 12, color: colors[clusterId % colors.length] },
+                        name: `Cluster ${+clusterId + 1} (K-means)`
+                    });
+                });
+                Plotly.newPlot("cluster2dKMeansDiv", traces, {
+                    title: "Donor Clustering (K-means + PCA)",
+                    height: 600,
+                    xaxis: { title: "PC1" },
+                    yaxis: { title: "PC2" }
+                });
+            }, [donationData]);
+
+            return (
+                <div className="p-6">
+                    <h1 className="text-3xl font-bold mb-4">
+                        Donation Flow & Cluster Analysis + COCM Visualizations + QF Simulation
+                    </h1>
+                    <h2 className="text-2xl font-semibold mt-6">寄付シュミレーション</h2>
+                    <p>ここでは、寄付データを用いたシミュレーションを実行し、その結果を可視化します。下の「Generate Random Donations」ボタンで新たな寄付データを生成し、シナリオの変化を確認してください。</p>
+                    <div className="flex space-x-4 mb-4 items-center">
+                        <label>
+                            Number of Donors:
+                            <input type="number" value={numDonors} onChange={(e) => setNumDonors(Number(e.target.value))} />
+                        </label>
+                        <label>
+                            Number of Projects:
+                            <input type="number" value={numProjects} onChange={(e) => setNumProjects(Number(e.target.value))} />
+                        </label>
+                        <button onClick={handleGenerate}>Generate Random Donations</button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div id="sankeyDiv"></div>
+                        <div>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Donor</th>
+                                        {projKeys.map((project, idx) => <th key={idx}>{project}</th>)}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {donorKeys.map((donor) => (
+                                        <tr key={donor}>
+                                            <td>{donor}</td>
+                                            {projKeys.map((project, idx) => (
+                                                <td key={idx}>
+                                                    {donationData.tableData[donor][project] > 0
+                                                        ? `¥${donationData.tableData[donor][project].toLocaleString()}`
+                                                        : "-"}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+
+                    <h2 className="text-2xl font-semibold">寄付行動可視化・クラスタリング</h2>
+                    <p>このセクションでは、3Dおよび2Dの可視化を通して、寄付者の行動パターンやクラスタリングの結果を表示します。シミュレーションの結果に合わせた動的な変化をご確認ください。</p>
+                    <div className="mt-6 flex" style={{ gap: "20px", flexWrap: "wrap" }}>
+                        <div style={{ flex: 1, minWidth: "300px" }}>
+                            <div id="network3dDiv" style={{ height: "600px" }}></div>
+                        </div>
+                        <div style={{ flex: 1, minWidth: "300px" }}>
+                            <div id="cluster2dKMeansDiv" style={{ height: "600px" }}></div>
+                        </div>
+                    </div>
+
+                    {/* プロジェクト概要テーブル（GrantSimulator 風の UI） */}
+                    <div className="mt-6">
+                        <h2 className="text-2xl font-semibold">QFシュミレーション</h2>
+                        <p>ここでは、各プロジェクトの寄付総額とマッチング配分をQFスコアに基づいて計算し、シナリオごとのパフォーマンスを評価します。Matching Fund プールの変更により、配分結果が自動で更新されます。</p>
+
+                        {/* Matching Fund 調整用 */}
+                        <div className="mt-6" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <label><strong>Matching Fund プール (円):</strong></label>
+                            <input type="number" value={matchingPool} onChange={handleMatchingPoolChange} style={{ width: "100px" }} />
+                        </div>
+
+                        {/* 説明文 */}
+                        <div className="mt-6" style={{ border: "1px solid #ccc", padding: "10px", borderRadius: "5px", backgroundColor: "#fdfdfd" }}>
+                            <p><strong>多様性係数：</strong> 寄付した寄付者が属するユニークなクラスタ数を全クラスタ数（3）で割った値です。</p>
+                        </div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>プロジェクト名</th>
+                                    <th>寄付内訳<br /><span title="各寄付者の寄付額の内訳です"></span></th>
+                                    <th>寄付者数<br /><span title="このプロジェクトに寄付した寄付者の数です"></span></th>
+                                    <th>多様性係数<br /><span title="寄付した寄付者が属するユニークなクラスタ数を全クラスタ数（3）で割った値です"></span></th>
+                                    <th>寄付総額<br /><span title="各寄付者から集計した総寄付額です"></span></th>
+                                    <th>マッチング<br /><span title="新 QF スコアに基づく配分額です"></span></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {projectSummaries.map((p, idx) => (
+                                    <tr key={idx}>
+                                        <td>{p.project}</td>
+                                        <td>{JSON.stringify(p.donationBreakdown)}</td>
+                                        <td>{p.donorCount}</td>
+                                        <td>{p.diversityFactor.toFixed(2)}</td>
+                                        <td>¥{p.totalDonation.toLocaleString()}</td>
+                                        <td>¥{Math.round(p.finalMatchingFunds).toLocaleString()}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {/* 追加分析グラフ */}
+                    <div className="chart-container">
+                        <div id="barChartDiv" style={{ height: "400px" }}></div>
+                        <div style={{ display: "flex", gap: "20px", marginTop: "20px" }}>
+                            <div id="lineChartDiv" style={{ height: "400px", flex: 1 }}></div>
+                            <div id="cumDistDiv" style={{ height: "400px", flex: 1 }}></div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<DonationVisualizer />, document.getElementById("root"));
+    </script>
+</body>
+
+</html>

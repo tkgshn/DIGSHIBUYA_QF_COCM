@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Donation Flow & QF Simulation Comparison</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+        }
+
+        .p-6 {
+            padding: 1.5rem;
+        }
+
+        .text-xl {
+            font-size: 1.25rem;
+        }
+
+        .text-3xl {
+            font-size: 2rem;
+        }
+
+        .font-bold {
+            font-weight: bold;
+        }
+
+        .mb-4 {
+            margin-bottom: 1rem;
+        }
+
+        .mt-6 {
+            margin-top: 1.5rem;
+        }
+
+        .flex {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .grid {
+            display: grid;
+            gap: 20px;
+        }
+
+        .half {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 0.5rem;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #ccc;
+        }
+
+        th,
+        td {
+            padding: 5px;
+            text-align: center;
+        }
+
+        input {
+            margin-left: 5px;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+        }
+
+        .chart-container {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <!-- ライブラリ読み込み -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/numeric/1.2.6/numeric.min.js"></script>
+
+    <!-- メインの React コンポーネント -->
+    <script type="text/babel">
+        // k-meansクラスタリング（k=3）: 各点はdonationMatrixの行（寄付者の寄付額ベクトル）
+        function kMeansClusteringWithAssignments(data, k = 3) {
+            if (!data || !data.length || !data[0] || !data[0].length) {
+                return { assignments: [], centroids: [] };
+            }
+
+            try {
+                let centroids = data.slice(0, k).map(pt => pt.slice());
+                // もしデータが足りない場合は、ランダムな初期中心点を生成
+                if (centroids.length < k) {
+                    // 各次元の最小値と最大値を計算
+                    const dims = data[0].length;
+                    const mins = Array(dims).fill(Infinity);
+                    const maxs = Array(dims).fill(-Infinity);
+                    data.forEach(pt => {
+                        for (let i = 0; i < dims; i++) {
+                            mins[i] = Math.min(mins[i], pt[i]);
+                            maxs[i] = Math.max(maxs[i], pt[i]);
+                        }
+                    });
+
+                    // 足りない中心点をランダムに生成
+                    while (centroids.length < k) {
+                        const randPt = Array(dims).fill(0).map((_, i) =>
+                            mins[i] + Math.random() * (maxs[i] - mins[i])
+                        );
+                        centroids.push(randPt);
+                    }
+                }
+
+                let assignments = new Array(data.length).fill(0);
+                let changed = true;
+                let iterations = 0;
+                const MAX_ITERATIONS = 100; // 無限ループ防止
+
+                while (changed && iterations < MAX_ITERATIONS) {
+                    iterations++;
+                    changed = false;
+                    const newAssignments = data.map(point => {
+                        let minDist = Infinity, clusterIndex = 0;
+                        centroids.forEach((centroid, i) => {
+                            const dist = Math.sqrt(
+                                centroid.reduce((sum, c, j) => sum + Math.pow(point[j] - c, 2), 0)
+                            );
+                            if (dist < minDist) {
+                                minDist = dist;
+                                clusterIndex = i;
+                            }
+                        });
+                        return clusterIndex;
+                    });
+                    for (let i = 0; i < data.length; i++) {
+                        if (newAssignments[i] !== assignments[i]) {
+                            changed = true;
+                            break;
+                        }
+                    }
+                    assignments = newAssignments;
+                    const newCentroids = Array.from({ length: k }, () => new Array(data[0].length).fill(0));
+                    const counts = new Array(k).fill(0);
+                    data.forEach((point, idx) => {
+                        const cluster = assignments[idx];
+                        counts[cluster]++;
+                        point.forEach((val, j) => {
+                            newCentroids[cluster][j] += val;
+                        });
+                    });
+                    for (let i = 0; i < k; i++) {
+                        if (counts[i] > 0) {
+                            newCentroids[i] = newCentroids[i].map(v => v / counts[i]);
+                        }
+                    }
+                    centroids = newCentroids;
+                }
+                return { assignments, centroids };
+            } catch (e) {
+                console.error("k-meansクラスタリング中にエラーが発生しました:", e);
+                return { assignments: [], centroids: [] };
+            }
+        }
+
+        // PCAによる2次元射影（寄付者クラスタリング用）
+        function pcaProjection(data, numComponents = 2) {
+            // データがない場合や不正な場合は空の配列を返す
+            if (!data || !data.length || !data[0] || !data[0].length) {
+                return [];
+            }
+
+            const n = data.length, d = data[0].length;
+            const means = [];
+            for (let j = 0; j < d; j++) {
+                let sum = 0;
+                for (let i = 0; i < n; i++) {
+                    sum += data[i][j];
+                }
+                means[j] = sum / n;
+            }
+
+            try {
+                const centered = data.map(row => row.map((val, j) => val - means[j]));
+                const svd = numeric.svd(centered);
+                const V = svd.V;
+                const proj = centered.map(row => {
+                    const projected = [];
+                    for (let i = 0; i < numComponents; i++) {
+                        let val = 0;
+                        for (let j = 0; j < d; j++) {
+                            val += row[j] * V[j][i];
+                        }
+                        projected.push(val);
+                    }
+                    return projected;
+                });
+                return proj;
+            } catch (e) {
+                console.error("PCA計算中にエラーが発生しました:", e);
+                return [];
+            }
+        }
+
+        // DonationSimulator コンポーネント
+        function DonationSimulator() {
+            const [matchingPool, setMatchingPool] = React.useState(1000000);
+            const [refresh, setRefresh] = React.useState(0);
+            const [rawDonationData, setRawDonationData] = React.useState([]);
+            const [isLoading, setIsLoading] = React.useState(true);
+            const [error, setError] = React.useState(null);
+
+            // JSONデータを読み込む
+            React.useEffect(() => {
+                setIsLoading(true);
+                let isMounted = true; // コンポーネントがマウントされているかを追跡
+
+                fetch('Contribution.json')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTPエラー: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if (isMounted) { // コンポーネントがまだマウントされている場合のみ状態を更新
+                            console.log('データ読み込み成功:', data.length, '件');
+                            setRawDonationData(data);
+                            setIsLoading(false);
+                        }
+                    })
+                    .catch(err => {
+                        if (isMounted) { // コンポーネントがまだマウントされている場合のみ状態を更新
+                            console.error('データ読み込みエラー:', err);
+                            setError(`データ読み込みに失敗しました: ${err.message}`);
+                            setIsLoading(false);
+                        }
+                    });
+
+                // クリーンアップ関数
+                return () => {
+                    isMounted = false; // コンポーネントがアンマウントされたらフラグを更新
+                };
+            }, [refresh]);
+
+            // データ変換：寄付者・プロジェクトリスト、tableData、links を生成
+            const donors = React.useMemo(() => {
+                return [...new Set(rawDonationData.map(r => r.userId))];
+            }, [rawDonationData]);
+
+            const projects = React.useMemo(() => {
+                return [...new Set(rawDonationData.map(r => r.grantId).filter(id => id))];
+            }, [rawDonationData]);
+
+            const tableData = React.useMemo(() => {
+                let tData = {};
+                donors.forEach(donor => {
+                    tData[donor] = {};
+                    projects.forEach(project => {
+                        tData[donor][project] = 0;
+                    });
+                });
+                rawDonationData.forEach(record => {
+                    const donor = record.userId;
+                    const project = record.grantId;
+                    if (!donor || !project) return;
+                    tData[donor][project] += record.amount;
+                });
+                return tData;
+            }, [donors, projects, rawDonationData]);
+
+            const links = React.useMemo(() => {
+                let ls = [];
+                donors.forEach(donor => {
+                    projects.forEach(project => {
+                        const amt = tableData[donor][project];
+                        if (amt > 0) {
+                            ls.push({ source: donor, target: project, value: amt });
+                        }
+                    });
+                });
+                return ls;
+            }, [tableData, donors, projects]);
+
+            // donationMatrix: rows=donors, columns=projects
+            const donationMatrix = React.useMemo(() => {
+                return donors.map(donor => projects.map(project => tableData[donor][project]));
+            }, [donors, projects, tableData]);
+
+            // k-means clustering on donationMatrix (for diversity計算・2D表示)
+            const { assignments } = React.useMemo(() =>
+                donors.length > 0 && projects.length > 0 ?
+                kMeansClusteringWithAssignments(donationMatrix, 3) :
+                { assignments: [] }
+            , [donationMatrix]);
+
+            // QFシミュレーションのためのプロジェクト集計
+            // 各プロジェクトについて、各寄付者の寄付額から baseScore と diversityFactor を計算
+            function computeProjectSummaries() {
+                if (donors.length === 0 || projects.length === 0 || !assignments.length) {
+                    return { normal: [], cocm: [] };
+                }
+
+                let normal = [];
+                let cocm = [];
+                projects.forEach(project => {
+                    let totalDonation = 0;
+                    let donorCount = 0;
+                    let donationBreakdown = [];
+                    let sumSqrt = 0;
+                    let clustersSet = new Set();
+                    donors.forEach((donor, i) => {
+                        const amt = tableData[donor][project];
+                        totalDonation += amt;
+                        if (amt > 0) {
+                            donorCount++;
+                            donationBreakdown.push(amt);
+                            sumSqrt += Math.sqrt(amt);
+                            clustersSet.add(assignments[i]);
+                        }
+                    });
+                    const baseScore = Math.pow(sumSqrt, 2);
+                    const diversityFactor = clustersSet.size / 3; // 3は固定クラスタ数
+                    // 通常のQF
+                    const newScore_normal = baseScore * diversityFactor;
+                    // COCMの場合： diversityFactorにボーナス（例：+0.5）を付与
+                    const newScore_cocm = baseScore * (diversityFactor + 0.5);
+
+                    normal.push({
+                        project,
+                        totalDonation,
+                        donorCount,
+                        donationBreakdown,
+                        baseScore,
+                        diversityFactor,
+                        newScore: newScore_normal
+                    });
+                    cocm.push({
+                        project,
+                        totalDonation,
+                        donorCount,
+                        donationBreakdown,
+                        baseScore,
+                        diversityFactor,
+                        newScore: newScore_cocm
+                    });
+                });
+                // 各方式での総スコア
+                const totalNewScore_normal = normal.reduce((sum, p) => sum + p.newScore, 0);
+                const totalNewScore_cocm = cocm.reduce((sum, p) => sum + p.newScore, 0);
+                // マッチング額を割り当て
+                normal = normal.map(p => ({
+                    ...p,
+                    finalMatchingFunds: totalNewScore_normal ? (p.newScore / totalNewScore_normal * matchingPool) : 0
+                }));
+                cocm = cocm.map(p => ({
+                    ...p,
+                    finalMatchingFunds: totalNewScore_cocm ? (p.newScore / totalNewScore_cocm * matchingPool) : 0
+                }));
+                return { normal, cocm };
+            }
+
+            const { normal: projectSummaries_normal, cocm: projectSummaries_cocm } = React.useMemo(() => computeProjectSummaries(), [tableData, donors, projects, matchingPool, assignments]);
+
+            // ----------------- Plotly描画 -----------------
+
+            // Sankey Diagram (寄付フロー)
+            React.useEffect(() => {
+                if (donors.length === 0 || projects.length === 0 || links.length === 0) {
+                    return; // データが不足している場合は描画しない
+                }
+
+                // 描画処理を少し遅らせる
+                const timer = setTimeout(() => {
+                    try {
+                        // DOM要素が存在するか確認
+                        const element = document.getElementById("sankeyDiv");
+                        if (!element) {
+                            console.warn("sankeyDiv要素が見つかりません");
+                            return;
+                        }
+
+                        const nodeLabels = [...donors, ...projects];
+                        const nodeMap = {};
+                        nodeLabels.forEach((label, i) => nodeMap[label] = i);
+                        const sankeySource = links.map(link => nodeMap[link.source]);
+                        const sankeyTarget = links.map(link => nodeMap[link.target]);
+                        const sankeyValues = links.map(link => link.value);
+                        const sankeyTrace = {
+                            type: "sankey",
+                            orientation: "h",
+                            node: {
+                                pad: 5,
+                                thickness: 20,
+                                line: { color: "black", width: 0.5 },
+                                label: nodeLabels
+                            },
+                            link: {
+                                source: sankeySource,
+                                target: sankeyTarget,
+                                value: sankeyValues
+                            }
+                        };
+                        Plotly.newPlot("sankeyDiv", [sankeyTrace], {
+                            title: "Donation Flow Sankey Diagram",
+                            font: { size: 10 },
+                            height: 500
+                        });
+                    } catch (e) {
+                        console.error("サンキーダイアグラム描画中にエラーが発生しました:", e);
+                    }
+                }, 500); // 500ミリ秒の遅延
+
+                // クリーンアップ関数
+                return () => clearTimeout(timer);
+            }, [links, donors, projects, rawDonationData]);
+
+            // 3D Network Visualization (プロジェクト・寄付者の位置配置)
+            React.useEffect(() => {
+                if (donors.length === 0 || projects.length === 0 || links.length === 0) {
+                    return; // データが不足している場合は描画しない
+                }
+
+                // 描画処理を少し遅らせる
+                const timer = setTimeout(() => {
+                    try {
+                        // DOM要素が存在するか確認
+                        const element = document.getElementById("network3dDiv");
+                        if (!element) {
+                            console.warn("network3dDiv要素が見つかりません");
+                            return;
+                        }
+
+                        // プロジェクトは円状配置
+                        const radius = 150;
+                        const projectPositions = {};
+                        projects.forEach((project, index) => {
+                            const angle = (2 * Math.PI * index) / projects.length;
+                            projectPositions[project] = {
+                                x: radius * Math.cos(angle),
+                                y: radius * Math.sin(angle),
+                                z: 0
+                            };
+                        });
+                        // 寄付者の位置は、寄付先のプロジェクト位置の重み付き平均＋ジッター
+                        const donorPositions = {};
+                        donors.forEach(donor => {
+                            const donations = tableData[donor];
+                            let total = 0, sumX = 0, sumY = 0, sumZ = 0;
+                            projects.forEach(project => {
+                                const amt = donations[project];
+                                if (amt > 0) {
+                                    total += amt;
+                                    sumX += amt * projectPositions[project].x;
+                                    sumY += amt * projectPositions[project].y;
+                                    sumZ += amt * projectPositions[project].z;
+                                }
+                            });
+                            if (total > 0) {
+                                donorPositions[donor] = {
+                                    x: sumX / total + (Math.random() - 0.5) * 30,
+                                    y: sumY / total + (Math.random() - 0.5) * 30,
+                                    z: sumZ / total + (Math.random() - 0.5) * 30
+                                };
+                            } else {
+                                donorPositions[donor] = {
+                                    x: (Math.random() - 0.5) * 50,
+                                    y: (Math.random() - 0.5) * 50,
+                                    z: (Math.random() - 0.5) * 50
+                                };
+                            }
+                        });
+                        const projectTrace = {
+                            x: projects.map(p => projectPositions[p].x),
+                            y: projects.map(p => projectPositions[p].y),
+                            z: projects.map(p => projectPositions[p].z),
+                            mode: "markers",
+                            type: "scatter3d",
+                            marker: { size: 12, color: "blue" },
+                            name: "Projects"
+                        };
+                        const donorTrace = {
+                            x: donors.map(d => donorPositions[d].x),
+                            y: donors.map(d => donorPositions[d].y),
+                            z: donors.map(d => donorPositions[d].z),
+                            mode: "markers",
+                            type: "scatter3d",
+                            marker: { size: 8, color: "red" },
+                            name: "Donors"
+                        };
+                        let edgeX = [], edgeY = [], edgeZ = [];
+                        links.forEach(link => {
+                            const donor = link.source;
+                            const project = link.target;
+                            if (donorPositions[donor] && projectPositions[project]) {
+                                edgeX.push(donorPositions[donor].x, projectPositions[project].x, null);
+                                edgeY.push(donorPositions[donor].y, projectPositions[project].y, null);
+                                edgeZ.push(donorPositions[donor].z, projectPositions[project].z, null);
+                            }
+                        });
+                        const edgeTrace = {
+                            x: edgeX,
+                            y: edgeY,
+                            z: edgeZ,
+                            mode: "lines",
+                            type: "scatter3d",
+                            line: { color: "green", width: 2 },
+                            hoverinfo: "none",
+                            name: "Donations"
+                        };
+                        Plotly.newPlot("network3dDiv", [projectTrace, donorTrace, edgeTrace], {
+                            title: "Donation 3D Network",
+                            height: 600,
+                            scene: {
+                                aspectratio: { x: 1, y: 1, z: 1 },
+                                camera: { eye: { x: 1.5, y: 1.5, z: 1.5 } }
+                            }
+                        });
+                    } catch (e) {
+                        console.error("3Dネットワーク描画中にエラーが発生しました:", e);
+                    }
+                }, 500); // 500ミリ秒の遅延
+
+                // クリーンアップ関数
+                return () => clearTimeout(timer);
+            }, [donors, projects, tableData, links, rawDonationData]);
+
+            // 2D Clustering Visualization (PCA + k-means)
+            React.useEffect(() => {
+                if (donors.length === 0 || projects.length === 0 || !assignments.length || donationMatrix.length === 0) {
+                    return; // データが不足している場合は描画しない
+                }
+
+                // 描画処理を少し遅らせる
+                const timer = setTimeout(() => {
+                    try {
+                        // DOM要素が存在するか確認
+                        const element = document.getElementById("cluster2dDiv");
+                        if (!element) {
+                            console.warn("cluster2dDiv要素が見つかりません");
+                            return;
+                        }
+
+                        const pcaCoords = pcaProjection(donationMatrix, 2);
+                        if (!pcaCoords.length) {
+                            console.warn("PCA座標が生成できませんでした");
+                            return;
+                        }
+
+                        // グループごとに色分け（シンプルに3クラスタ）
+                        const colors = ["red", "blue", "green"];
+                        const clusters = {};
+                        assignments.forEach((a, i) => {
+                            if (!clusters[a]) clusters[a] = [];
+                            clusters[a].push(i);
+                        });
+                        const traces = [];
+                        Object.keys(clusters).forEach(clusterId => {
+                            const indices = clusters[clusterId];
+                            const jitter = val => val + (Math.random() - 0.5) * 0.2;
+                            const xs = indices.map(i => jitter(pcaCoords[i][0]));
+                            const ys = indices.map(i => jitter(pcaCoords[i][1]));
+                            traces.push({
+                                x: xs,
+                                y: ys,
+                                mode: "markers",
+                                type: "scatter",
+                                marker: { size: 12, color: colors[clusterId % colors.length] },
+                                name: `Cluster ${+clusterId + 1}`
+                            });
+                        });
+                        Plotly.newPlot("cluster2dDiv", traces, {
+                            title: "Donor Clustering (PCA + k-means)",
+                            height: 600,
+                            xaxis: { title: "PC1" },
+                            yaxis: { title: "PC2" }
+                        });
+                    } catch (e) {
+                        console.error("クラスタリング可視化中にエラーが発生しました:", e);
+                    }
+                }, 500); // 500ミリ秒の遅延
+
+                // クリーンアップ関数
+                return () => clearTimeout(timer);
+            }, [donationMatrix, assignments, rawDonationData]);
+
+            // QFシミュレーショングラフ（通常のQFとCOCMを左右に並べて表示）
+            // バーチャート：プロジェクト別寄付総額とマッチング額
+            React.useEffect(() => {
+                if (!projectSummaries_normal || !projectSummaries_normal.length ||
+                    !projectSummaries_cocm || !projectSummaries_cocm.length) {
+                    return; // データが不足している場合は描画しない
+                }
+
+                // 描画処理を少し遅らせる
+                const timer = setTimeout(() => {
+                    try {
+                        // DOM要素が存在するか確認
+                        const normalElement = document.getElementById("barChartNormalDiv");
+                        const cocmElement = document.getElementById("barChartCOCMDiv");
+                        if (!normalElement || !cocmElement) {
+                            console.warn("barChartNormalDiv または barChartCOCMDiv 要素が見つかりません");
+                            return;
+                        }
+
+                        // 通常QF
+                        const sorted_normal = [...projectSummaries_normal].sort((a, b) => (b.totalDonation + b.finalMatchingFunds) - (a.totalDonation + a.finalMatchingFunds));
+                        const projectNames_normal = sorted_normal.map(p => p.project);
+                        const donationTotals_normal = sorted_normal.map(p => p.totalDonation);
+                        const matchingFunds_normal = sorted_normal.map(p => p.finalMatchingFunds);
+                        const trace1_normal = {
+                            x: projectNames_normal,
+                            y: donationTotals_normal,
+                            type: "bar",
+                            name: "支援額",
+                            marker: { color: "red" }
+                        };
+                        const trace2_normal = {
+                            x: projectNames_normal,
+                            y: matchingFunds_normal,
+                            type: "bar",
+                            name: "マッチング額",
+                            marker: { color: "green" }
+                        };
+                        Plotly.newPlot("barChartNormalDiv", [trace1_normal, trace2_normal], {
+                            title: "【通常QF】プロジェクト別寄付総額とマッチング額",
+                            barmode: "stack",
+                            yaxis: { title: "金額 (円)" }
+                        });
+
+                        // COCM
+                        const sorted_cocm = [...projectSummaries_cocm].sort((a, b) => (b.totalDonation + b.finalMatchingFunds) - (a.totalDonation + a.finalMatchingFunds));
+                        const projectNames_cocm = sorted_cocm.map(p => p.project);
+                        const donationTotals_cocm = sorted_cocm.map(p => p.totalDonation);
+                        const matchingFunds_cocm = sorted_cocm.map(p => p.finalMatchingFunds);
+                        const trace1_cocm = {
+                            x: projectNames_cocm,
+                            y: donationTotals_cocm,
+                            type: "bar",
+                            name: "支援額",
+                            marker: { color: "red" }
+                        };
+                        const trace2_cocm = {
+                            x: projectNames_cocm,
+                            y: matchingFunds_cocm,
+                            type: "bar",
+                            name: "マッチング額",
+                            marker: { color: "green" }
+                        };
+                        Plotly.newPlot("barChartCOCMDiv", [trace1_cocm, trace2_cocm], {
+                            title: "【COCM QF】プロジェクト別寄付総額とマッチング額",
+                            barmode: "stack",
+                            yaxis: { title: "金額 (円)" }
+                        });
+                    } catch (e) {
+                        console.error("バーチャート描画中にエラーが発生しました:", e);
+                    }
+                }, 500); // 500ミリ秒の遅延
+
+                // クリーンアップ関数
+                return () => clearTimeout(timer);
+            }, [projectSummaries_normal, projectSummaries_cocm, matchingPool, rawDonationData]);
+
+            // ライングラフ：順位別割り当て総額の配分
+            React.useEffect(() => {
+                if (!projectSummaries_normal || !projectSummaries_normal.length ||
+                    !projectSummaries_cocm || !projectSummaries_cocm.length) {
+                    return; // データが不足している場合は描画しない
+                }
+
+                // 描画処理を少し遅らせる
+                const timer = setTimeout(() => {
+                    try {
+                        // DOM要素が存在するか確認
+                        const normalElement = document.getElementById("lineChartNormalDiv");
+                        const cocmElement = document.getElementById("lineChartCOCMDiv");
+                        if (!normalElement || !cocmElement) {
+                            console.warn("lineChartNormalDiv または lineChartCOCMDiv 要素が見つかりません");
+                            return;
+                        }
+
+                        // 通常QF
+                        const sorted_normal = [...projectSummaries_normal].sort((a, b) => (b.totalDonation + b.finalMatchingFunds) - (a.totalDonation + a.finalMatchingFunds));
+                        const ranks_normal = sorted_normal.map((_, i) => i + 1);
+                        const allocatedAmounts_normal = sorted_normal.map(p => p.totalDonation + p.finalMatchingFunds);
+                        const trace_normal = {
+                            x: ranks_normal,
+                            y: allocatedAmounts_normal,
+                            mode: "lines+markers",
+                            type: "scatter",
+                            name: "割り当て総額"
+                        };
+                        Plotly.newPlot("lineChartNormalDiv", [trace_normal], {
+                            title: "【通常QF】順位別割り当て総額の配分",
+                            xaxis: { title: "順位", tickmode: "linear", dtick: 1 },
+                            yaxis: { title: "割り当て総額 (円)" }
+                        });
+
+                        // COCM
+                        const sorted_cocm = [...projectSummaries_cocm].sort((a, b) => (b.totalDonation + b.finalMatchingFunds) - (a.totalDonation + a.finalMatchingFunds));
+                        const ranks_cocm = sorted_cocm.map((_, i) => i + 1);
+                        const allocatedAmounts_cocm = sorted_cocm.map(p => p.totalDonation + p.finalMatchingFunds);
+                        const trace_cocm = {
+                            x: ranks_cocm,
+                            y: allocatedAmounts_cocm,
+                            mode: "lines+markers",
+                            type: "scatter",
+                            name: "割り当て総額"
+                        };
+                        Plotly.newPlot("lineChartCOCMDiv", [trace_cocm], {
+                            title: "【COCM QF】順位別割り当て総額の配分",
+                            xaxis: { title: "順位", tickmode: "linear", dtick: 1 },
+                            yaxis: { title: "割り当て総額 (円)" }
+                        });
+                    } catch (e) {
+                        console.error("ライングラフ描画中にエラーが発生しました:", e);
+                    }
+                }, 500); // 500ミリ秒の遅延
+
+                // クリーンアップ関数
+                return () => clearTimeout(timer);
+            }, [projectSummaries_normal, projectSummaries_cocm, matchingPool, rawDonationData]);
+
+            // 累積資金配分グラフ
+            React.useEffect(() => {
+                if (!projectSummaries_normal || !projectSummaries_normal.length ||
+                    !projectSummaries_cocm || !projectSummaries_cocm.length) {
+                    return; // データが不足している場合は描画しない
+                }
+
+                // 描画処理を少し遅らせる
+                const timer = setTimeout(() => {
+                    try {
+                        // DOM要素が存在するか確認
+                        const normalElement = document.getElementById("cumDistNormalDiv");
+                        const cocmElement = document.getElementById("cumDistCOCMDiv");
+                        if (!normalElement || !cocmElement) {
+                            console.warn("cumDistNormalDiv または cumDistCOCMDiv 要素が見つかりません");
+                            return;
+                        }
+
+                        // 通常QF
+                        const sorted_normal = [...projectSummaries_normal].sort((a, b) => (b.totalDonation + b.finalMatchingFunds) - (a.totalDonation + a.finalMatchingFunds));
+                        const totalProjects_normal = sorted_normal.length;
+                        const totalTotal_normal = sorted_normal.reduce((sum, p) => sum + (p.totalDonation + p.finalMatchingFunds), 0);
+                        let cumTotal_normal = [];
+                        sorted_normal.forEach((p, i) => {
+                            cumTotal_normal[i] = i === 0 ? p.totalDonation + p.finalMatchingFunds : cumTotal_normal[i - 1] + (p.totalDonation + p.finalMatchingFunds);
+                        });
+                        const xPercent_normal = sorted_normal.map((_, i) => ((i + 1) / totalProjects_normal) * 100);
+                        const yTotal_normal = cumTotal_normal.map(val => (val / totalTotal_normal) * 100);
+                        const traceTotal_normal = {
+                            x: xPercent_normal,
+                            y: yTotal_normal,
+                            mode: "lines+markers",
+                            type: "scatter",
+                            name: "累積総額",
+                            line: { color: "black" }
+                        };
+                        Plotly.newPlot("cumDistNormalDiv", [traceTotal_normal], {
+                            title: "【通常QF】累積資金配分グラフ",
+                            xaxis: { title: "プロジェクトランクのパーセンテージ (%)" },
+                            yaxis: { title: "累積割合 (%)" }
+                        });
+
+                        // COCM
+                        const sorted_cocm = [...projectSummaries_cocm].sort((a, b) => (b.totalDonation + b.finalMatchingFunds) - (a.totalDonation + a.finalMatchingFunds));
+                        const totalProjects_cocm = sorted_cocm.length;
+                        const totalTotal_cocm = sorted_cocm.reduce((sum, p) => sum + (p.totalDonation + p.finalMatchingFunds), 0);
+                        let cumTotal_cocm = [];
+                        sorted_cocm.forEach((p, i) => {
+                            cumTotal_cocm[i] = i === 0 ? p.totalDonation + p.finalMatchingFunds : cumTotal_cocm[i - 1] + (p.totalDonation + p.finalMatchingFunds);
+                        });
+                        const xPercent_cocm = sorted_cocm.map((_, i) => ((i + 1) / totalProjects_cocm) * 100);
+                        const yTotal_cocm = cumTotal_cocm.map(val => (val / totalTotal_cocm) * 100);
+                        const traceTotal_cocm = {
+                            x: xPercent_cocm,
+                            y: yTotal_cocm,
+                            mode: "lines+markers",
+                            type: "scatter",
+                            name: "累積総額",
+                            line: { color: "black" }
+                        };
+                        Plotly.newPlot("cumDistCOCMDiv", [traceTotal_cocm], {
+                            title: "【COCM QF】累積資金配分グラフ",
+                            xaxis: { title: "プロジェクトランクのパーセンテージ (%)" },
+                            yaxis: { title: "累積割合 (%)" }
+                        });
+                    } catch (e) {
+                        console.error("累積資金配分グラフ描画中にエラーが発生しました:", e);
+                    }
+                }, 500); // 500ミリ秒の遅延
+
+                // クリーンアップ関数
+                return () => clearTimeout(timer);
+            }, [projectSummaries_normal, projectSummaries_cocm, matchingPool, rawDonationData]);
+
+            // ----------------- JSXレンダリング -----------------
+            return (
+                <div className="p-6">
+                    <h1 className="text-3xl font-bold mb-4">
+                        Donation Flow & QF Simulation Comparison
+                    </h1>
+
+                    {isLoading ? (
+                        <div>データを読み込み中です...</div>
+                    ) : error ? (
+                        <div style={{ color: 'red' }}>{error}</div>
+                    ) : rawDonationData.length === 0 ? (
+                        <div>データが見つかりませんでした。</div>
+                    ) : (
+                        <React.Fragment>
+                            <div className="mb-4">
+                                <label>
+                                    Matching Fund プール (円):
+                                    <input
+                                        type="number"
+                                        value={matchingPool}
+                                        onChange={(e) => setMatchingPool(Number(e.target.value))}
+                                        style={{ width: "120px" }}
+                                    />
+                                </label>
+                                <button onClick={() => setRefresh(r => r + 1)} style={{ marginLeft: "20px" }}>
+                                    Refresh Data
+                                </button>
+                            </div>
+                            {/* Sankey Diagram */}
+                            <div id="sankeyDiv"></div>
+                            {/* 3D Network & 2D Clustering */}
+                            <div className="flex">
+                                <div className="half">
+                                    <div id="network3dDiv" style={{ height: "600px" }}></div>
+                                </div>
+                                <div className="half">
+                                    <div id="cluster2dDiv" style={{ height: "600px" }}></div>
+                                </div>
+                            </div>
+                            {/* QF Simulation Comparison */}
+                            <h2 className="text-3xl font-bold mt-6">QF Simulation Comparison</h2>
+                            <div className="flex">
+                                {/* 左側：通常QF */}
+                                <div className="half">
+                                    <h3 className="text-xl font-bold">通常 QF</h3>
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Project</th>
+                                                <th>寄付内訳</th>
+                                                <th>寄付者数</th>
+                                                <th>多様性係数</th>
+                                                <th>寄付総額</th>
+                                                <th>Matching</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {projectSummaries_normal && projectSummaries_normal.map((p, idx) => (
+                                                <tr key={idx}>
+                                                    <td>{p.project}</td>
+                                                    <td>{JSON.stringify(p.donationBreakdown)}</td>
+                                                    <td>{p.donorCount}</td>
+                                                    <td>{p.diversityFactor.toFixed(2)}</td>
+                                                    <td>¥{p.totalDonation.toLocaleString()}</td>
+                                                    <td>¥{Math.round(p.finalMatchingFunds).toLocaleString()}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                    <div id="barChartNormalDiv" style={{ height: "400px", marginTop: "20px" }}></div>
+                                    <div id="lineChartNormalDiv" style={{ height: "400px", marginTop: "20px" }}></div>
+                                    <div id="cumDistNormalDiv" style={{ height: "400px", marginTop: "20px" }}></div>
+                                </div>
+                                {/* 右側：COCM QF */}
+                                <div className="half">
+                                    <h3 className="text-xl font-bold">COCM QF</h3>
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Project</th>
+                                                <th>寄付内訳</th>
+                                                <th>寄付者数</th>
+                                                <th>多様性係数</th>
+                                                <th>寄付総額</th>
+                                                <th>Matching</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {projectSummaries_cocm && projectSummaries_cocm.map((p, idx) => (
+                                                <tr key={idx}>
+                                                    <td>{p.project}</td>
+                                                    <td>{JSON.stringify(p.donationBreakdown)}</td>
+                                                    <td>{p.donorCount}</td>
+                                                    <td>{p.diversityFactor.toFixed(2)}</td>
+                                                    <td>¥{p.totalDonation.toLocaleString()}</td>
+                                                    <td>¥{Math.round(p.finalMatchingFunds).toLocaleString()}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                    <div id="barChartCOCMDiv" style={{ height: "400px", marginTop: "20px" }}></div>
+                                    <div id="lineChartCOCMDiv" style={{ height: "400px", marginTop: "20px" }}></div>
+                                    <div id="cumDistCOCMDiv" style={{ height: "400px", marginTop: "20px" }}></div>
+                                </div>
+                            </div>
+                        </React.Fragment>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.render(<DonationSimulator />, document.getElementById("root"));
+    </script>
+</body>
+
+</html>
