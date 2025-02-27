@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>COCM Network Visualization</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #121212;
+            color: #f0f0f0;
+        }
+
+        .p-6 {
+            padding: 1.5rem;
+        }
+
+        .text-xl {
+            font-size: 1.25rem;
+        }
+
+        .text-3xl {
+            font-size: 2rem;
+        }
+
+        .font-bold {
+            font-weight: bold;
+        }
+
+        .mb-4 {
+            margin-bottom: 1rem;
+        }
+
+        .mt-6 {
+            margin-top: 1.5rem;
+        }
+
+        .flex {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .grid {
+            display: grid;
+            gap: 20px;
+        }
+
+        .half {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 0.5rem;
+            background-color: #1e1e1e;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #444;
+        }
+
+        th,
+        td {
+            padding: 5px;
+            text-align: center;
+        }
+
+        input {
+            margin-left: 5px;
+            background-color: #333;
+            color: #f0f0f0;
+            border: 1px solid #555;
+            padding: 5px;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            background-color: #2a6496;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        button:hover {
+            background-color: #1e4b75;
+        }
+
+        .chart-container {
+            margin-top: 20px;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .info-box {
+            background-color: #1e1e1e;
+            border: 1px solid #444;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+
+        .cluster-info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #1e1e1e;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <!-- ライブラリ読み込み -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/numeric/1.2.6/numeric.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <!-- メインの React コンポーネント -->
+    <script type="text/babel">
+        /**
+         * k-meansクラスタリング関数
+         *
+         * @param {Array<Array<number>>} data - クラスタリングするデータ（各行が寄付者、各列がプロジェクトへの寄付額）
+         * @param {number} k - クラスタ数（デフォルト: 3）
+         * @returns {Object} クラスタ割り当てと中心点の情報
+         */
+        function kMeansClusteringWithAssignments(data, k = 3) {
+            if (!data || !data.length || !data[0] || !data[0].length) {
+                return { assignments: [], centroids: [] };
+            }
+
+            try {
+                let centroids = data.slice(0, k).map(pt => pt.slice());
+                // もしデータが足りない場合は、ランダムな初期中心点を生成
+                if (centroids.length < k) {
+                    // 各次元の最小値と最大値を計算
+                    const dims = data[0].length;
+                    const mins = Array(dims).fill(Infinity);
+                    const maxs = Array(dims).fill(-Infinity);
+                    data.forEach(pt => {
+                        for (let i = 0; i < dims; i++) {
+                            mins[i] = Math.min(mins[i], pt[i]);
+                            maxs[i] = Math.max(maxs[i], pt[i]);
+                        }
+                    });
+
+                    // 足りない中心点をランダムに生成
+                    while (centroids.length < k) {
+                        const randPt = Array(dims).fill(0).map((_, i) =>
+                            mins[i] + Math.random() * (maxs[i] - mins[i])
+                        );
+                        centroids.push(randPt);
+                    }
+                }
+
+                let assignments = new Array(data.length).fill(0);
+                let changed = true;
+                let iterations = 0;
+                const MAX_ITERATIONS = 100; // 無限ループ防止
+
+                while (changed && iterations < MAX_ITERATIONS) {
+                    iterations++;
+                    changed = false;
+                    const newAssignments = data.map(point => {
+                        let minDist = Infinity, clusterIndex = 0;
+                        centroids.forEach((centroid, i) => {
+                            const dist = Math.sqrt(
+                                centroid.reduce((sum, c, j) => sum + Math.pow(point[j] - c, 2), 0)
+                            );
+                            if (dist < minDist) {
+                                minDist = dist;
+                                clusterIndex = i;
+                            }
+                        });
+                        return clusterIndex;
+                    });
+                    for (let i = 0; i < data.length; i++) {
+                        if (newAssignments[i] !== assignments[i]) {
+                            changed = true;
+                            break;
+                        }
+                    }
+                    assignments = newAssignments;
+                    const newCentroids = Array.from({ length: k }, () => new Array(data[0].length).fill(0));
+                    const counts = new Array(k).fill(0);
+                    data.forEach((point, idx) => {
+                        const cluster = assignments[idx];
+                        counts[cluster]++;
+                        point.forEach((val, j) => {
+                            newCentroids[cluster][j] += val;
+                        });
+                    });
+                    for (let i = 0; i < k; i++) {
+                        if (counts[i] > 0) {
+                            newCentroids[i] = newCentroids[i].map(v => v / counts[i]);
+                        }
+                    }
+                    centroids = newCentroids;
+                }
+                return { assignments, centroids };
+            } catch (e) {
+                console.error("k-meansクラスタリング中にエラーが発生しました:", e);
+                return { assignments: [], centroids: [] };
+            }
+        }
+
+        /**
+         * PCAによる次元射影関数
+         *
+         * @param {Array<Array<number>>} data - 高次元データ（寄付者×プロジェクトの行列）
+         * @param {number} numComponents - 次元削減後の次元数（デフォルト: 3）
+         * @returns {Array<Array<number>>} 次元削減後のデータ
+         */
+        function pcaProjection(data, numComponents = 3) {
+            // データがない場合や不正な場合は空の配列を返す
+            if (!data || !data.length || !data[0] || !data[0].length) {
+                return [];
+            }
+
+            const n = data.length, d = data[0].length;
+
+            // PCAを実行するには行数が列数より多い必要がある
+            // 行数が列数以下の場合はランダムな座標を返す
+            if (n <= d) {
+                console.warn("PCA: 行数が列数以下のため、ランダム座標を生成します");
+                return data.map(() => {
+                    return Array(numComponents).fill(0).map(() => (Math.random() - 0.5) * 2);
+                });
+            }
+
+            const means = [];
+            for (let j = 0; j < d; j++) {
+                let sum = 0;
+                for (let i = 0; i < n; i++) {
+                    sum += data[i][j];
+                }
+                means[j] = sum / n;
+            }
+
+            try {
+                const centered = data.map(row => row.map((val, j) => val - means[j]));
+                const svd = numeric.svd(centered);
+                const V = svd.V;
+                const proj = centered.map(row => {
+                    const projected = [];
+                    for (let i = 0; i < numComponents; i++) {
+                        let val = 0;
+                        for (let j = 0; j < d; j++) {
+                            val += row[j] * V[j][i];
+                        }
+                        projected.push(val);
+                    }
+                    return projected;
+                });
+                return proj;
+            } catch (e) {
+                console.error("PCA計算中にエラーが発生しました:", e);
+                // エラーが発生した場合はランダムな座標を返す
+                return data.map(() => {
+                    return Array(numComponents).fill(0).map(() => (Math.random() - 0.5) * 2);
+                });
+            }
+        }
+
+        /**
+         * 類似度行列の計算
+         *
+         * @param {Array<Array<number>>} data - 寄付データの行列
+         * @returns {Array<Array<number>>} 類似度行列
+         */
+        function calculateSimilarityMatrix(data) {
+            const n = data.length;
+            const similarityMatrix = Array(n).fill().map(() => Array(n).fill(0));
+
+            for (let i = 0; i < n; i++) {
+                for (let j = i; j < n; j++) {
+                    if (i === j) {
+                        similarityMatrix[i][j] = 1; // 自分自身との類似度は1
+                    } else {
+                        // コサイン類似度の計算
+                        let dotProduct = 0;
+                        let normA = 0;
+                        let normB = 0;
+
+                        for (let k = 0; k < data[i].length; k++) {
+                            dotProduct += data[i][k] * data[j][k];
+                            normA += data[i][k] * data[i][k];
+                            normB += data[j][k] * data[j][k];
+                        }
+
+                        const similarity = normA && normB ? dotProduct / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
+                        similarityMatrix[i][j] = similarity;
+                        similarityMatrix[j][i] = similarity; // 対称行列
+                    }
+                }
+            }
+
+            return similarityMatrix;
+        }
+
+        /**
+         * COCMネットワーク可視化コンポーネント
+         */
+        function COCMNetworkVisualizer() {
+            const [isLoading, setIsLoading] = React.useState(true);
+            const [error, setError] = React.useState(null);
+            const [rawDonationData, setRawDonationData] = React.useState([]);
+            const [clusterCount, setClusterCount] = React.useState(5);
+            const [repulsionStrength, setRepulsionStrength] = React.useState(200);
+            const [linkStrength, setLinkStrength] = React.useState(0.7);
+            const [showLabels, setShowLabels] = React.useState(false);
+            const [selectedCluster, setSelectedCluster] = React.useState(null);
+            const [clusterInfo, setClusterInfo] = React.useState({});
+            const [refresh, setRefresh] = React.useState(0);
+
+            /**
+             * JSONデータ読み込み処理
+             *
+             * Contribution.jsonとGrants.jsonファイルから寄付データとプロジェクト情報を読み込みます。
+             */
+            React.useEffect(() => {
+                setIsLoading(true);
+                let isMounted = true; // コンポーネントがマウントされているかを追跡
+
+                // 両方のJSONファイルを並行して読み込む
+                Promise.all([
+                    fetch('Contribution.json')
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`Contribution.json HTTPエラー: ${response.status}`);
+                            }
+                            return response.json();
+                        }),
+                    fetch('Grants.json')
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`Grants.json HTTPエラー: ${response.status}`);
+                            }
+                            return response.json();
+                        })
+                ])
+                .then(([contributionData, grantsData]) => {
+                    if (isMounted) { // コンポーネントがまだマウントされている場合のみ状態を更新
+                        console.log('寄付データ読み込み成功:', contributionData.length, '件');
+                        console.log('プロジェクトデータ読み込み成功:', grantsData.length, '件');
+                        setRawDonationData(contributionData);
+                        // プロジェクト情報をグローバル変数として保存
+                        window.grantsData = grantsData;
+                        setIsLoading(false);
+                    }
+                })
+                .catch(err => {
+                    if (isMounted) { // コンポーネントがまだマウントされている場合のみ状態を更新
+                        console.error('データ読み込みエラー:', err);
+                        setError(`データ読み込みに失敗しました: ${err.message}`);
+                        setIsLoading(false);
+                    }
+                });
+
+                // クリーンアップ関数
+                return () => {
+                    isMounted = false; // コンポーネントがアンマウントされたらフラグを更新
+                };
+            }, [refresh]);
+
+            /**
+             * データ変換処理
+             */
+            const donors = React.useMemo(() => {
+                return [...new Set(rawDonationData.map(r => r.userId))];
+            }, [rawDonationData]);
+
+            const projects = React.useMemo(() => {
+                return [...new Set(rawDonationData.map(r => r.grantId).filter(id => id))];
+            }, [rawDonationData]);
+
+            const tableData = React.useMemo(() => {
+                let tData = {};
+                donors.forEach(donor => {
+                    tData[donor] = {};
+                    projects.forEach(project => {
+                        tData[donor][project] = 0;
+                    });
+                });
+                rawDonationData.forEach(record => {
+                    const donor = record.userId;
+                    const project = record.grantId;
+                    if (!donor || !project) return;
+                    tData[donor][project] += record.amount;
+                });
+                return tData;
+            }, [donors, projects, rawDonationData]);
+
+            const links = React.useMemo(() => {
+                let ls = [];
+                donors.forEach(donor => {
+                    projects.forEach(project => {
+                        const amt = tableData[donor][project];
+                        if (amt > 0) {
+                            ls.push({ source: donor, target: project, value: amt });
+                        }
+                    });
+                });
+                return ls;
+            }, [tableData, donors, projects]);
+
+            /**
+             * 寄付行列の生成
+             */
+            const donationMatrix = React.useMemo(() => {
+                return donors.map(donor => projects.map(project => tableData[donor][project]));
+            }, [donors, projects, tableData]);
+
+            /**
+             * 寄付者クラスタリング
+             */
+            const { assignments } = React.useMemo(() =>
+                donors.length > 0 && projects.length > 0 ?
+                kMeansClusteringWithAssignments(donationMatrix, clusterCount) :
+                { assignments: [] }
+            , [donationMatrix, clusterCount]);
+
+            /**
+             * プロジェクトクラスタリング
+             * プロジェクトが受け取った寄付のパターンに基づいてクラスタリング
+             */
+            const projectMatrix = React.useMemo(() => {
+                // プロジェクト×寄付者の行列を作成（転置）
+                return projects.map(project =>
+                    donors.map(donor => tableData[donor][project])
+                );
+            }, [projects, donors, tableData]);
+
+            const { assignments: projectAssignments } = React.useMemo(() =>
+                projects.length > 0 && donors.length > 0 ?
+                kMeansClusteringWithAssignments(projectMatrix, Math.min(clusterCount, projects.length)) :
+                { assignments: [] }
+            , [projectMatrix, clusterCount]);
+
+            /**
+             * 類似度に基づくネットワークデータの生成
+             */
+            const networkData = React.useMemo(() => {
+                if (donors.length === 0 || projects.length === 0) {
+                    return { nodes: [], links: [] };
+                }
+
+                // ノードの作成
+                const nodes = [
+                    ...donors.map((id, index) => ({
+                        id,
+                        type: 'donor',
+                        cluster: assignments[index],
+                        donations: projects.reduce((sum, project) => sum + tableData[id][project], 0)
+                    })),
+                    ...projects.map((id, index) => ({
+                        id,
+                        type: 'project',
+                        cluster: projectAssignments[index],
+                        received: donors.reduce((sum, donor) => sum + tableData[donor][id], 0)
+                    }))
+                ];
+
+                // リンクの作成
+                const networkLinks = links.map(link => ({
+                    source: link.source,
+                    target: link.target,
+                    value: link.value
+                }));
+
+                return { nodes, links: networkLinks };
+            }, [donors, projects, assignments, projectAssignments, tableData, links]);
+
+            /**
+             * クラスタ情報の計算
+             */
+            React.useEffect(() => {
+                if (networkData.nodes.length === 0) return;
+
+                const donorClusters = {};
+                const projectClusters = {};
+
+                // ドナークラスタの情報収集
+                networkData.nodes.filter(node => node.type === 'donor').forEach(node => {
+                    if (!donorClusters[node.cluster]) {
+                        donorClusters[node.cluster] = {
+                            count: 0,
+                            totalDonations: 0,
+                            donors: []
+                        };
+                    }
+                    donorClusters[node.cluster].count++;
+                    donorClusters[node.cluster].totalDonations += node.donations;
+                    donorClusters[node.cluster].donors.push(node.id);
+                });
+
+                // プロジェクトクラスタの情報収集
+                networkData.nodes.filter(node => node.type === 'project').forEach(node => {
+                    if (!projectClusters[node.cluster]) {
+                        projectClusters[node.cluster] = {
+                            count: 0,
+                            totalReceived: 0,
+                            projects: []
+                        };
+                    }
+                    projectClusters[node.cluster].count++;
+                    projectClusters[node.cluster].totalReceived += node.received;
+                    projectClusters[node.cluster].projects.push(node.id);
+                });
+
+                setClusterInfo({
+                    donorClusters,
+                    projectClusters
+                });
+            }, [networkData]);
+
+            /**
+             * 3D Force-Directed Graph
+             */
+            React.useEffect(() => {
+                if (networkData.nodes.length === 0 || networkData.links.length === 0) {
+                    return;
+                }
+
+                // 3D座標の計算
+                // PCAを使用して初期位置を設定
+                const donorFeatures = donationMatrix;
+                const donorCoords = pcaProjection(donorFeatures, 3);
+
+                // プロジェクトの特徴量（転置した寄付行列）
+                const projectFeatures = projectMatrix;
+                const projectCoords = pcaProjection(projectFeatures, 3);
+
+                // ノードに座標を追加
+                const nodes3D = networkData.nodes.map((node, index) => {
+                    if (node.type === 'donor') {
+                        const donorIndex = donors.indexOf(node.id);
+                        return {
+                            ...node,
+                            x: donorCoords[donorIndex] ? donorCoords[donorIndex][0] : (Math.random() - 0.5) * 100,
+                            y: donorCoords[donorIndex] ? donorCoords[donorIndex][1] : (Math.random() - 0.5) * 100,
+                            z: donorCoords[donorIndex] ? donorCoords[donorIndex][2] : (Math.random() - 0.5) * 100
+                        };
+                    } else {
+                        const projectIndex = projects.indexOf(node.id);
+                        return {
+                            ...node,
+                            x: projectCoords[projectIndex] ? projectCoords[projectIndex][0] * 1.5 : (Math.random() - 0.5) * 150,
+                            y: projectCoords[projectIndex] ? projectCoords[projectIndex][1] * 1.5 : (Math.random() - 0.5) * 150,
+                            z: projectCoords[projectIndex] ? projectCoords[projectIndex][2] * 1.5 : (Math.random() - 0.5) * 150
+                        };
+                    }
+                });
+
+                // リンクのソースとターゲットをインデックスに変換
+                const nodeMap = {};
+                nodes3D.forEach((node, i) => {
+                    nodeMap[node.id] = i;
+                });
+
+                // リンクの作成（無効なリンクを除外）
+                const links3D = [];
+                networkData.links.forEach(link => {
+                    const sourceIndex = nodeMap[link.source];
+                    const targetIndex = nodeMap[link.target];
+
+                    // sourceとtargetの両方が有効なインデックスを持つ場合のみリンクを追加
+                    if (sourceIndex !== undefined && targetIndex !== undefined) {
+                        links3D.push({
+                            source: sourceIndex,
+                            target: targetIndex,
+                            value: link.value
+                        });
+                    }
+                });
+
+                // クラスタごとの色を設定
+                const donorClusterColors = [
+                    '#ff6b6b', '#48dbfb', '#1dd1a1', '#feca57', '#54a0ff',
+                    '#5f27cd', '#ff9f43', '#00d2d3', '#c8d6e5', '#576574'
+                ];
+
+                const projectClusterColors = [
+                    '#ff9ff3', '#0abde3', '#10ac84', '#c8d6e5', '#2e86de',
+                    '#8854d0', '#ee5253', '#01a3a4', '#576574', '#2e86de'
+                ];
+
+                // ノードのサイズを計算
+                const maxDonation = Math.max(...nodes3D.filter(n => n.type === 'donor').map(n => n.donations));
+                const maxReceived = Math.max(...nodes3D.filter(n => n.type === 'project').map(n => n.received));
+
+                // Plotlyのトレース作成
+                const traces = [];
+
+                // ドナークラスタごとのトレース
+                const donorClusters = {};
+                nodes3D.filter(node => node.type === 'donor').forEach(node => {
+                    if (!donorClusters[node.cluster]) {
+                        donorClusters[node.cluster] = {
+                            x: [], y: [], z: [],
+                            text: [],
+                            sizes: [],
+                            ids: []
+                        };
+                    }
+                    donorClusters[node.cluster].x.push(node.x);
+                    donorClusters[node.cluster].y.push(node.y);
+                    donorClusters[node.cluster].z.push(node.z);
+                    donorClusters[node.cluster].text.push(`Donor: ${node.id}<br>Donations: ¥${node.donations.toLocaleString()}`);
+                    donorClusters[node.cluster].sizes.push(5 + (node.donations / maxDonation) * 15);
+                    donorClusters[node.cluster].ids.push(node.id);
+                });
+
+                Object.keys(donorClusters).forEach((cluster, i) => {
+                    const clusterData = donorClusters[cluster];
+                    traces.push({
+                        x: clusterData.x,
+                        y: clusterData.y,
+                        z: clusterData.z,
+                        mode: 'markers' + (showLabels ? '+text' : ''),
+                        type: 'scatter3d',
+                        marker: {
+                            size: clusterData.sizes,
+                            color: donorClusterColors[i % donorClusterColors.length],
+                            opacity: selectedCluster !== null && parseInt(cluster) !== selectedCluster ? 0.3 : 0.8
+                        },
+                        text: clusterData.text,
+                        hoverinfo: 'text',
+                        name: `Donor Cluster ${parseInt(cluster) + 1}`,
+                        customdata: clusterData.ids,
+                        cluster: parseInt(cluster)
+                    });
+                });
+
+                // プロジェクトクラスタごとのトレース
+                const projectClusters = {};
+                nodes3D.filter(node => node.type === 'project').forEach(node => {
+                    if (!projectClusters[node.cluster]) {
+                        projectClusters[node.cluster] = {
+                            x: [], y: [], z: [],
+                            text: [],
+                            sizes: [],
+                            ids: []
+                        };
+                    }
+                    projectClusters[node.cluster].x.push(node.x);
+                    projectClusters[node.cluster].y.push(node.y);
+                    projectClusters[node.cluster].z.push(node.z);
+                    projectClusters[node.cluster].text.push(`Project: ${node.id}<br>Received: ¥${node.received.toLocaleString()}`);
+                    projectClusters[node.cluster].sizes.push(10 + (node.received / maxReceived) * 20);
+                    projectClusters[node.cluster].ids.push(node.id);
+                });
+
+                Object.keys(projectClusters).forEach((cluster, i) => {
+                    const clusterData = projectClusters[cluster];
+                    traces.push({
+                        x: clusterData.x,
+                        y: clusterData.y,
+                        z: clusterData.z,
+                        mode: 'markers' + (showLabels ? '+text' : ''),
+                        type: 'scatter3d',
+                        marker: {
+                            size: clusterData.sizes,
+                            color: projectClusterColors[i % projectClusterColors.length],
+                            symbol: 'diamond',
+                            opacity: selectedCluster !== null ? 0.5 : 0.9,
+                            line: {
+                                width: 1,
+                                color: 'white'
+                            }
+                        },
+                        text: clusterData.text,
+                        hoverinfo: 'text',
+                        name: `Project Cluster ${parseInt(cluster) + 1}`,
+                        customdata: clusterData.ids
+                    });
+                });
+
+                // リンクのトレース
+                let edgeX = [], edgeY = [], edgeZ = [];
+                let edgeColors = [];
+
+                links3D.forEach(link => {
+                    const source = nodes3D[link.source];
+                    const target = nodes3D[link.target];
+
+                    // リンクの色を決定（ドナーのクラスタに基づく）
+                    const donorNode = source.type === 'donor' ? source : target;
+                    const clusterColor = donorClusterColors[donorNode.cluster % donorClusterColors.length];
+
+                    // 選択されたクラスタがある場合、そのクラスタに関連するリンクのみ表示
+                    const shouldShow = selectedCluster === null || donorNode.cluster === selectedCluster;
+
+                    if (shouldShow) {
+                        edgeX.push(source.x, target.x, null);
+                        edgeY.push(source.y, target.y, null);
+                        edgeZ.push(source.z, target.z, null);
+                        edgeColors.push(clusterColor, clusterColor, clusterColor);
+                    }
+                });
+
+                if (edgeX.length > 0) {
+                    traces.push({
+                        x: edgeX,
+                        y: edgeY,
+                        z: edgeZ,
+                        mode: 'lines',
+                        type: 'scatter3d',
+                        line: {
+                            color: edgeColors,
+                            width: 2
+                        },
+                        hoverinfo: 'none',
+                        name: 'Donations'
+                    });
+                }
+
+                // 3Dグラフの描画
+                Plotly.newPlot('network3dDiv', traces, {
+                    title: 'COCM 3D Network Visualization',
+                    height: 700,
+                    scene: {
+                        aspectratio: { x: 1, y: 1, z: 1 },
+                        camera: { eye: { x: 1.5, y: 1.5, z: 1.5 } },
+                        xaxis: { title: 'X Axis', showgrid: true, zeroline: false, showline: false },
+                        yaxis: { title: 'Y Axis', showgrid: true, zeroline: false, showline: false },
+                        zaxis: { title: 'Z Axis', showgrid: true, zeroline: false, showline: false }
+                    },
+                    margin: { l: 0, r: 0, b: 0, t: 50 },
+                    paper_bgcolor: '#121212',
+                    plot_bgcolor: '#121212',
+                    font: { color: '#f0f0f0' },
+                    showlegend: true,
+                    legend: {
+                        x: 0,
+                        y: 1,
+                        bgcolor: 'rgba(30,30,30,0.7)',
+                        bordercolor: '#444',
+                        borderwidth: 1
+                    }
+                });
+
+                // クラスタ選択のイベントハンドラ
+                const graphDiv = document.getElementById('network3dDiv');
+                graphDiv.on('plotly_click', function(data) {
+                    if (data.points.length > 0) {
+                        const point = data.points[0];
+                        if (point.data.cluster !== undefined) {
+                            // ドナークラスタをクリックした場合
+                            setSelectedCluster(selectedCluster === point.data.cluster ? null : point.data.cluster);
+                        }
+                    }
+                });
+
+            }, [networkData, donors, projects, donationMatrix, projectMatrix, showLabels, selectedCluster, repulsionStrength, linkStrength]);
+
+            /**
+             * 2D Force-Directed Graph
+             */
+            React.useEffect(() => {
+                if (networkData.nodes.length === 0 || networkData.links.length === 0) {
+                    return;
+                }
+
+                // D3.jsを使用したフォースレイアウト
+                const width = 800;
+                const height = 600;
+
+                // SVGコンテナの作成
+                d3.select("#forceDirectedDiv").selectAll("*").remove();
+                const svg = d3.select("#forceDirectedDiv")
+                    .append("svg")
+                    .attr("width", width)
+                    .attr("height", height)
+                    .style("background-color", "#121212");
+
+                // クラスタごとの色を設定
+                const donorClusterColors = [
+                    '#ff6b6b', '#48dbfb', '#1dd1a1', '#feca57', '#54a0ff',
+                    '#5f27cd', '#ff9f43', '#00d2d3', '#c8d6e5', '#576574'
+                ];
+
+                const projectClusterColors = [
+                    '#ff9ff3', '#0abde3', '#10ac84', '#c8d6e5', '#2e86de',
+                    '#8854d0', '#ee5253', '#01a3a4', '#576574', '#2e86de'
+                ];
+
+                // ノードとリンクのデータを準備
+                const nodes = JSON.parse(JSON.stringify(networkData.nodes));
+                const links = networkData.links.map(link => {
+                    return {
+                        source: link.source,
+                        target: link.target,
+                        value: link.value
+                    };
+                });
+
+                // シミュレーションの作成
+                const simulation = d3.forceSimulation(nodes)
+                    .force("link", d3.forceLink(links).id(d => d.id).strength(linkStrength))
+                    .force("charge", d3.forceManyBody().strength(-repulsionStrength))
+                    .force("center", d3.forceCenter(width / 2, height / 2))
+                    .force("x", d3.forceX(width / 2).strength(0.1))
+                    .force("y", d3.forceY(height / 2).strength(0.1));
+
+                // リンクの描画（無効なリンクを除外）
+                const validLinks = links.filter(link => {
+                    const source = nodes.find(n => n.id === link.source);
+                    const target = nodes.find(n => n.id === link.target);
+                    return source && target;
+                });
+
+                const link = svg.append("g")
+                    .attr("stroke-opacity", 0.6)
+                    .selectAll("line")
+                    .data(validLinks)
+                    .join("line")
+                    .attr("stroke", d => {
+                        const source = nodes.find(n => n.id === d.source);
+                        const target = nodes.find(n => n.id === d.target);
+                        if (!source || !target) return "#999"; // フォールバック色
+                        const donorNode = source.type === 'donor' ? source : target;
+                        return donorClusterColors[donorNode.cluster % donorClusterColors.length];
+                    })
+                    .attr("stroke-width", d => Math.sqrt(d.value) / 100)
+                    .attr("opacity", d => {
+                        if (selectedCluster === null) return 0.5;
+                        const source = nodes.find(n => n.id === d.source);
+                        const target = nodes.find(n => n.id === d.target);
+                        if (!source || !target) return 0.1; // 選択されていない場合は薄く
+                        const donorNode = source.type === 'donor' ? source : target;
+                        return donorNode.cluster === selectedCluster ? 0.8 : 0.1;
+                    });
+
+                // ノードの描画
+                const node = svg.append("g")
+                    .selectAll("circle")
+                    .data(nodes)
+                    .join(enter => {
+                        // ドナーとプロジェクトで異なる形状を使用
+                        const elements = enter.append(d =>
+                            d.type === 'donor'
+                                ? document.createElementNS("http://www.w3.org/2000/svg", "circle")
+                                : document.createElementNS("http://www.w3.org/2000/svg", "polygon")
+                        );
+
+                        // 共通の属性設定
+                        elements
+                            .attr("fill", d => {
+                                if (d.type === 'donor') {
+                                    return donorClusterColors[d.cluster % donorClusterColors.length];
+                                } else {
+                                    return projectClusterColors[d.cluster % projectClusterColors.length];
+                                }
+                            })
+                            .attr("stroke", "#fff")
+                            .attr("stroke-width", 1.5)
+                            .attr("opacity", d => {
+                                if (selectedCluster === null) return 0.8;
+                                if (d.type === 'donor') {
+                                    return d.cluster === selectedCluster ? 0.9 : 0.3;
+                                } else {
+                                    return 0.7;
+                                }
+                            })
+                            .call(drag(simulation));
+
+                        // ドナー（円）の属性設定
+                        elements.filter(d => d.type === 'donor')
+                            .attr("r", d => 5 + Math.sqrt(d.donations) / 100);
+
+                        // プロジェクト（ダイヤモンド）の属性設定
+                        elements.filter(d => d.type === 'project')
+                            .attr("points", d => {
+                                const size = 5 + Math.sqrt(d.received) / 100;
+                                return `0,-${size} ${size},0 0,${size} -${size},0`;
+                            });
+
+                        return elements;
+                    });
+
+                // ホバー時のツールチップ
+                node.append("title")
+                    .text(d => {
+                        if (d.type === 'donor') {
+                            return `Donor: ${d.id}\nDonations: ¥${d.donations.toLocaleString()}\nCluster: ${d.cluster + 1}`;
+                        } else {
+                            return `Project: ${d.id}\nReceived: ¥${d.received.toLocaleString()}\nCluster: ${d.cluster + 1}`;
+                        }
+                    });
+
+                // ラベルの表示（オプション）
+                if (showLabels) {
+                    const label = svg.append("g")
+                        .selectAll("text")
+                        .data(nodes)
+                        .join("text")
+                        .attr("font-size", 10)
+                        .attr("fill", "#fff")
+                        .text(d => d.id.substring(0, 10))
+                        .attr("dx", 12)
+                        .attr("dy", 4);
+
+                    simulation.on("tick", () => {
+                        link
+                            .attr("x1", d => d.source.x)
+                            .attr("y1", d => d.source.y)
+                            .attr("x2", d => d.target.x)
+                            .attr("y2", d => d.target.y);
+
+                        node
+                            .attr("cx", d => d.x)
+                            .attr("cy", d => d.y)
+                            .attr("transform", d => {
+                                if (d.type === 'donor') {
+                                    return `translate(${d.x},${d.y})`;
+                                } else {
+                                    return `translate(${d.x},${d.y})`;
+                                }
+                            });
+
+                        label
+                            .attr("x", d => d.x)
+                            .attr("y", d => d.y);
+                    });
+                } else {
+                    simulation.on("tick", () => {
+                        link
+                            .attr("x1", d => d.source.x)
+                            .attr("y1", d => d.source.y)
+                            .attr("x2", d => d.target.x)
+                            .attr("y2", d => d.target.y);
+
+                        node
+                            .attr("cx", d => d.x)
+                            .attr("cy", d => d.y)
+                            .attr("transform", d => {
+                                if (d.type === 'donor') {
+                                    return `translate(${d.x},${d.y})`;
+                                } else {
+                                    return `translate(${d.x},${d.y})`;
+                                }
+                            });
+                    });
+                }
+
+                // ドラッグ機能
+                function drag(simulation) {
+                    function dragstarted(event) {
+                        if (!event.active) simulation.alphaTarget(0.3).restart();
+                        event.subject.fx = event.subject.x;
+                        event.subject.fy = event.subject.y;
+                    }
+
+                    function dragged(event) {
+                        event.subject.fx = event.x;
+                        event.subject.fy = event.y;
+                    }
+
+                    function dragended(event) {
+                        if (!event.active) simulation.alphaTarget(0);
+                        event.subject.fx = null;
+                        event.subject.fy = null;
+                    }
+
+                    return d3.drag()
+                        .on("start", dragstarted)
+                        .on("drag", dragged)
+                        .on("end", dragended);
+                }
+
+                // クラスタ選択のイベントハンドラ
+                node.on("click", (event, d) => {
+                    if (d.type === 'donor') {
+                        setSelectedCluster(selectedCluster === d.cluster ? null : d.cluster);
+                    }
+                });
+
+            }, [networkData, showLabels, selectedCluster, repulsionStrength, linkStrength]);
+
+            // UI コンポーネント
+            return (
+                <div className="p-6">
+                    <h1 className="text-3xl font-bold mb-4">COCM Network Visualization</h1>
+
+                    {isLoading ? (
+                        <div>データを読み込み中です...</div>
+                    ) : error ? (
+                        <div style={{ color: 'red' }}>{error}</div>
+                    ) : (
+                        <React.Fragment>
+                            <div className="info-box">
+                                <p>このビジュアライゼーションは、Connection-Oriented Cluster Matching (COCM) の概念に基づいて寄付ネットワークを可視化します。</p>
+                                <p>寄付者（赤い丸）とプロジェクト（青いダイヤモンド）は、寄付パターンに基づいてクラスタリングされています。</p>
+                                <p>同じクラスターに属する寄付者は類似した寄付行動を示し、同じクラスターに属するプロジェクトは類似した支援を受けています。</p>
+                                <p>クラスターをクリックすると、そのクラスターに関連する寄付者とプロジェクトが強調表示されます。</p>
+                                <p>プロジェクト名: {selectedCluster !== null && clusterInfo.projectClusters && clusterInfo.projectClusters[selectedCluster] ? clusterInfo.projectClusters[selectedCluster].projects.map(id => window.grantsData && window.grantsData.find(g => g.id === id) ? window.grantsData.find(g => g.id === id).name : id).join(', ') : ''}</p>
+                            </div>
+
+                            <div className="controls">
+                                <label>
+                                    クラスター数:
+                                    <input
+                                        type="number"
+                                        min="2"
+                                        max="10"
+                                        value={clusterCount}
+                                        onChange={(e) => setClusterCount(Math.max(2, Math.min(10, parseInt(e.target.value) || 2)))}
+                                    />
+                                </label>
+
+                                <label>
+                                    反発力:
+                                    <input
+                                        type="range"
+                                        min="50"
+                                        max="500"
+                                        value={repulsionStrength}
+                                        onChange={(e) => setRepulsionStrength(parseInt(e.target.value))}
+                                    />
+                                </label>
+
+                                <label>
+                                    リンク強度:
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="100"
+                                        value={linkStrength * 100}
+                                        onChange={(e) => setLinkStrength(parseInt(e.target.value) / 100)}
+                                    />
+                                </label>
+
+                                <label>
+                                    <input
+                                        type="checkbox"
+                                        checked={showLabels}
+                                        onChange={(e) => setShowLabels(e.target.checked)}
+                                    />
+                                    ラベルを表示
+                                </label>
+
+                                <button onClick={() => setRefresh(r => r + 1)}>データを再読み込み</button>
+
+                                {selectedCluster !== null && (
+                                    <button onClick={() => setSelectedCluster(null)}>選択解除</button>
+                                )}
+                            </div>
+
+                            <div className="flex">
+                                <div className="half">
+                                    <div id="network3dDiv" style={{ height: "700px", width: "100%" }}></div>
+                                </div>
+                                <div className="half">
+                                    <div id="forceDirectedDiv" style={{ height: "600px", width: "100%" }}></div>
+
+                                    {selectedCluster !== null && clusterInfo.donorClusters && (
+                                        <div className="cluster-info">
+                                            <h3>クラスター {selectedCluster + 1} の情報</h3>
+                                            <p>寄付者数: {clusterInfo.donorClusters[selectedCluster] && clusterInfo.donorClusters[selectedCluster].count || 0}</p>
+                                            <p>総寄付額: ¥{(clusterInfo.donorClusters[selectedCluster] && clusterInfo.donorClusters[selectedCluster].totalDonations || 0).toLocaleString()}</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </React.Fragment>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.render(<COCMNetworkVisualizer />, document.getElementById("root"));
+    </script>
+</body>
+
+</html>

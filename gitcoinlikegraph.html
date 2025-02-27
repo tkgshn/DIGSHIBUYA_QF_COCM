@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>COCM Network Graph</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #000;
+    }
+    #graph {
+      width: 100vw;
+      height: 100vh;
+    }
+    .loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      font-size: 24px;
+      font-family: Arial, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div id="graph"></div>
+  <div id="loading" class="loading">データを読み込み中...</div>
+
+  <script>
+    // 実際のデータを読み込む関数
+    async function loadRealData() {
+      try {
+        // Contribution.jsonを読み込む
+        const contributionResponse = await fetch('Contribution.json');
+        const contributions = await contributionResponse.json();
+
+        // Grants.jsonを読み込む
+        const grantsResponse = await fetch('Grants.json');
+        const grants = await grantsResponse.json();
+
+        return { contributions, grants };
+      } catch (error) {
+        console.error('データの読み込みに失敗しました:', error);
+        return null;
+      }
+    }
+
+    // データを処理して可視化用のデータ構造に変換する関数
+    function processData(rawData) {
+      if (!rawData) return null;
+
+      const { contributions, grants } = rawData;
+
+      // プロジェクト（助成金）のマップを作成
+      const projectsMap = {};
+      grants.forEach(grant => {
+        projectsMap[grant.id] = {
+          id: grant.id,
+          name: grant.name,
+          donationTotal: 0,
+          donorCount: 0,
+          donors: new Set(),
+          exclusiveDonors: new Set() // そのプロジェクトにのみ寄付しているドナーのセット
+        };
+      });
+
+      // ドナー（寄付者）のマップを作成
+      const donorsMap = {};
+
+      // 寄付データを処理
+      const links = [];
+
+      contributions.forEach(contribution => {
+        // grantIdがnullの場合はスキップ
+        if (!contribution.grantId || contribution.grantId === "null") return;
+
+        // プロジェクトが存在しない場合はスキップ
+        if (!projectsMap[contribution.grantId]) return;
+
+        // ドナー情報を追加/更新
+        if (!donorsMap[contribution.userId]) {
+          donorsMap[contribution.userId] = {
+            id: contribution.userId,
+            donations: [],
+            projectIds: new Set() // 寄付したプロジェクトのIDセット
+          };
+        }
+
+        // 寄付情報を追加
+        const link = {
+          source: contribution.userId,
+          target: contribution.grantId,
+          value: contribution.amountUsd,
+          flagged: contribution.flagged
+        };
+
+        links.push(link);
+        donorsMap[contribution.userId].donations.push(link);
+        donorsMap[contribution.userId].projectIds.add(contribution.grantId);
+
+        // プロジェクト統計を更新
+        projectsMap[contribution.grantId].donationTotal += contribution.amountUsd;
+        projectsMap[contribution.grantId].donors.add(contribution.userId);
+      });
+
+      // 各ドナーが寄付したプロジェクト数を計算
+      Object.values(donorsMap).forEach(donor => {
+        donor.projectCount = donor.projectIds.size;
+
+        // 1つのプロジェクトにのみ寄付しているドナーを特定
+        if (donor.projectCount === 1) {
+          const projectId = Array.from(donor.projectIds)[0];
+          projectsMap[projectId].exclusiveDonors.add(donor.id);
+        }
+      });
+
+      // プロジェクトの寄付者数と排他的寄付者の割合を計算
+      Object.values(projectsMap).forEach(project => {
+        project.donorCount = project.donors.size;
+        project.exclusiveDonorCount = project.exclusiveDonors.size;
+        project.exclusiveDonorRatio = project.donorCount > 0 ?
+          project.exclusiveDonorCount / project.donorCount : 0;
+      });
+
+      // 配列に変換
+      const projects = Object.values(projectsMap);
+      const donors = Object.values(donorsMap);
+
+      // データ統計情報をコンソールに出力
+      console.log("データ統計情報:");
+      console.log(`総プロジェクト数: ${projects.length}`);
+      console.log(`総寄付者数: ${donors.length}`);
+      console.log(`総寄付数: ${links.length}`);
+
+      // 不審な寄付（flagged=true）を特定
+      const flaggedLinks = links.filter(link => link.flagged);
+      const normalLinks = links.filter(link => !link.flagged);
+
+      // 不審なドナーを特定（flaggedな寄付をしたドナー）
+      const flaggedDonorIds = new Set();
+      flaggedLinks.forEach(link => {
+        flaggedDonorIds.add(link.source);
+      });
+
+      // 不審なプロジェクトを特定
+      // 方法1: flaggedな寄付を多く受けたプロジェクト
+      const flaggedProjectCounts = {};
+      flaggedLinks.forEach(link => {
+        if (!flaggedProjectCounts[link.target]) {
+          flaggedProjectCounts[link.target] = 0;
+        }
+        flaggedProjectCounts[link.target]++;
+      });
+
+      let suspiciousProjectId = null;
+      let maxFlaggedCount = 0;
+
+      Object.entries(flaggedProjectCounts).forEach(([projectId, count]) => {
+        if (count > maxFlaggedCount) {
+          maxFlaggedCount = count;
+          suspiciousProjectId = projectId;
+        }
+      });
+
+      // 方法2: 排他的寄付者の割合が高いプロジェクト
+      // 排他的寄付者の割合が高いプロジェクトを特定（しきい値: 0.7 = 70%）
+      const exclusiveThreshold = 0.7;
+      const suspiciousProjectsByExclusivity = projects
+        .filter(p => p.donorCount >= 5) // 少なくとも5人以上の寄付者がいるプロジェクト
+        .filter(p => p.exclusiveDonorRatio >= exclusiveThreshold)
+        .sort((a, b) => b.exclusiveDonorRatio - a.exclusiveDonorRatio);
+
+      // 排他的寄付者の割合が最も高いプロジェクトを不審プロジェクトとして選択
+      // ただし、flaggedな寄付が多いプロジェクトが既に特定されている場合はそちらを優先
+      if (!suspiciousProjectId && suspiciousProjectsByExclusivity.length > 0) {
+        suspiciousProjectId = suspiciousProjectsByExclusivity[0].id;
+      }
+
+      // 不審プロジェクトの詳細情報
+      let suspiciousProjectDetails = null;
+      if (suspiciousProjectId) {
+        const project = projectsMap[suspiciousProjectId];
+        suspiciousProjectDetails = {
+          id: project.id,
+          name: project.name,
+          donorCount: project.donorCount,
+          exclusiveDonorCount: project.exclusiveDonorCount,
+          exclusiveDonorRatio: project.exclusiveDonorRatio,
+          flaggedDonationCount: flaggedProjectCounts[project.id] || 0
+        };
+      }
+
+      // 各プロジェクトの排他的寄付者の割合をコンソールに出力（デバッグ用）
+      console.log("プロジェクト別排他的寄付者の割合:");
+      projects
+        .filter(p => p.donorCount >= 3) // 少なくとも3人以上の寄付者がいるプロジェクト
+        .sort((a, b) => b.exclusiveDonorRatio - a.exclusiveDonorRatio)
+        .forEach(p => {
+          console.log(`${p.name}: ${(p.exclusiveDonorRatio * 100).toFixed(1)}% (${p.exclusiveDonorCount}/${p.donorCount}人)`);
+        });
+
+      return {
+        projects,
+        donors,
+        links: normalLinks,
+        flaggedLinks,
+        suspiciousProjectId,
+        suspiciousProjectDetails,
+        flaggedDonorIds,
+        projectsMap,
+        suspiciousProjectsByExclusivity
+      };
+    }
+
+    // 位置計算関数
+    function calculatePositions(data) {
+      const { projects, donors, links, flaggedLinks } = data;
+
+      // 全ノードのリスト
+      const nodes = [
+        ...projects.map(p => ({ id: p.id, type: 'project', name: p.name })),
+        ...donors.map(d => ({ id: d.id, type: 'donor' }))
+      ];
+
+      // 初期位置を設定
+      const positions = {};
+
+      // 通常プロジェクトは中央付近に配置
+      projects.forEach(project => {
+        positions[project.id] = {
+          x: (Math.random() - 0.5) * 50,
+          y: (Math.random() - 0.5) * 50,
+          z: (Math.random() - 0.5) * 50
+        };
+      });
+
+      // ドナーの初期位置
+      donors.forEach(donor => {
+        const donorNormalLinks = links.filter(link => link.source === donor.id);
+        const donorFlaggedLinks = flaggedLinks.filter(link => link.source === donor.id);
+
+        // 不審なプロジェクトのみに寄付しているドナー
+        if (donorNormalLinks.length === 0 && donorFlaggedLinks.length > 0) {
+          positions[donor.id] = {
+            x: positions[suspiciousProjectId].x + (Math.random() - 0.5) * 40,
+            y: positions[suspiciousProjectId].y + (Math.random() - 0.5) * 40,
+            z: positions[suspiciousProjectId].z + (Math.random() - 0.5) * 40
+          };
+        }
+        // 通常プロジェクトに寄付しているドナー
+        else if (donorNormalLinks.length > 0) {
+          // 寄付先プロジェクトの平均位置 + ランダム
+          let sumX = 0, sumY = 0, sumZ = 0;
+
+          donorNormalLinks.forEach(link => {
+            const projectPos = positions[link.target];
+            if (projectPos) {
+              sumX += projectPos.x;
+              sumY += projectPos.y;
+              sumZ += projectPos.z;
+            }
+          });
+
+          const avgX = sumX / donorNormalLinks.length || 0;
+          const avgY = sumY / donorNormalLinks.length || 0;
+          const avgZ = sumZ / donorNormalLinks.length || 0;
+
+          positions[donor.id] = {
+            x: avgX + (Math.random() - 0.5) * 30,
+            y: avgY + (Math.random() - 0.5) * 30,
+            z: avgZ + (Math.random() - 0.5) * 30
+          };
+        }
+        // 寄付していないドナー
+        else {
+          positions[donor.id] = {
+            x: (Math.random() - 0.5) * 100,
+            y: (Math.random() - 0.5) * 100,
+            z: (Math.random() - 0.5) * 100
+          };
+        }
+      });
+
+      // フォースシミュレーション
+      const iterations = 150;
+
+      // 力の係数
+      const repulsionForce = 1000;  // 反発力
+      const attractionForce = 0.1;  // 引力
+
+      for (let iter = 0; iter < iterations; iter++) {
+        // 各ノードに作用する力
+        const forces = {};
+        nodes.forEach(node => {
+          forces[node.id] = { x: 0, y: 0, z: 0 };
+        });
+
+        // 反発力（効率化のため近いノードのみ）
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const nodeA = nodes[i];
+            const nodeB = nodes[j];
+            const posA = positions[nodeA.id];
+            const posB = positions[nodeB.id];
+
+            if (!posA || !posB) continue;
+
+            const dx = posB.x - posA.x;
+            const dy = posB.y - posA.y;
+            const dz = posB.z - posA.z;
+
+            const distSq = dx*dx + dy*dy + dz*dz;
+            const dist = Math.sqrt(distSq) || 0.1;
+
+            // 一定距離以上離れたノードは無視
+            if (dist > 150) continue;
+
+            // プロジェクト同士は強く反発
+            let force = repulsionForce / distSq;
+            if (nodeA.type === 'project' && nodeB.type === 'project') {
+              force *= 3; // プロジェクト同士の反発を強く
+            }
+
+            // 距離の単位ベクトル
+            const ux = dx / dist;
+            const uy = dy / dist;
+            const uz = dz / dist;
+
+            // ノードAへの力（反対方向）
+            forces[nodeA.id].x -= force * ux;
+            forces[nodeA.id].y -= force * uy;
+            forces[nodeA.id].z -= force * uz;
+
+            // ノードBへの力（同じ方向）
+            forces[nodeB.id].x += force * ux;
+            forces[nodeB.id].y += force * uy;
+            forces[nodeB.id].z += force * uz;
+          }
+        }
+
+        // 引力（リンク）
+        links.forEach(link => {
+          const sourcePos = positions[link.source];
+          const targetPos = positions[link.target];
+
+          if (!sourcePos || !targetPos) return;
+
+          const dx = targetPos.x - sourcePos.x;
+          const dy = targetPos.y - sourcePos.y;
+          const dz = targetPos.z - sourcePos.z;
+
+          const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) || 0.1;
+
+          // 寄付額に応じた引力
+          const force = attractionForce * dist * Math.sqrt(link.value / 500);
+
+          // 距離の単位ベクトル
+          const ux = dx / dist;
+          const uy = dy / dist;
+          const uz = dz / dist;
+
+          // ドナーからプロジェクトへの引力
+          forces[link.source].x += force * ux;
+          forces[link.source].y += force * uy;
+          forces[link.source].z += force * uz;
+
+          // プロジェクトへの引力は弱めに
+          forces[link.target].x -= force * ux * 0.2;
+          forces[link.target].y -= force * uy * 0.2;
+          forces[link.target].z -= force * uz * 0.2;
+        });
+
+        // 不審な寄付の引力
+        flaggedLinks.forEach(link => {
+          const sourcePos = positions[link.source];
+          const targetPos = positions[link.target];
+
+          if (!sourcePos || !targetPos) return;
+
+          const dx = targetPos.x - sourcePos.x;
+          const dy = targetPos.y - sourcePos.y;
+          const dz = targetPos.z - sourcePos.z;
+
+          const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) || 0.1;
+
+          // 寄付額に応じた引力
+          const force = attractionForce * dist * Math.sqrt(link.value / 500);
+
+          // 距離の単位ベクトル
+          const ux = dx / dist;
+          const uy = dy / dist;
+          const uz = dz / dist;
+
+          // ドナーから不審プロジェクトへの引力
+          forces[link.source].x += force * ux;
+          forces[link.source].y += force * uy;
+          forces[link.source].z += force * uz;
+        });
+
+        // 位置更新
+        nodes.forEach(node => {
+          const force = forces[node.id];
+          const pos = positions[node.id];
+
+          if (!force || !pos) return;
+
+          // 減衰係数
+          const damping = 0.95 - (iter / iterations * 0.7);
+
+          // 他のノードは力に従って移動
+          pos.x += force.x * damping;
+          pos.y += force.y * damping;
+          pos.z += force.z * damping;
+        });
+      }
+
+      return positions;
+    }
+
+    // グラフを描画する関数
+    async function renderGraph() {
+      // ローディング表示
+      document.getElementById('loading').style.display = 'block';
+
+      // データを読み込む
+      const rawData = await loadRealData();
+      const data = processData(rawData);
+
+      if (!data) {
+        document.getElementById('loading').textContent = 'データの読み込みに失敗しました。';
+        return;
+      }
+
+      const { projects, donors, links, flaggedLinks } = data;
+
+      // 位置計算用のデータを準備（不審プロジェクトの特別扱いを無効化）
+      const positionData = {
+        projects,
+        donors,
+        links: [...links, ...flaggedLinks], // すべての寄付を通常の寄付として扱う
+        flaggedLinks: [], // 不審な寄付は空に
+        suspiciousProjectId: null // 不審プロジェクトは特定しない
+      };
+
+      // 位置計算
+      const positions = calculatePositions(positionData);
+
+      // プロジェクトのサイズを寄付額に応じて計算
+      const getProjectSize = (project) => {
+        // 寄付総額に基づいてサイズを決定（対数スケール）
+        return Math.max(18, Math.min(35, 15 + Math.log(project.donationTotal + 1) * 2));
+      };
+
+      // プロジェクトトレース
+      const projectsX = [];
+      const projectsY = [];
+      const projectsZ = [];
+      const projectSizes = [];
+      const projectHoverTexts = [];
+      const projectNames = [];
+
+      projects.forEach(project => {
+        if (positions[project.id]) {
+          projectsX.push(positions[project.id].x);
+          projectsY.push(positions[project.id].y);
+          projectsZ.push(positions[project.id].z);
+          projectSizes.push(getProjectSize(project));
+          projectNames.push(project.name);
+
+          // ホバーテキスト
+          projectHoverTexts.push(
+            `${project.name}<br>` +
+            // `ID: ${project.id}<br>` +
+            `寄付者数: ${project.donorCount}人<br>` +
+            `寄付総額: ${project.donationTotal.toFixed(2)} JPY<br>` +
+            `このプロジェクトだけを支援している人の数: ${project.exclusiveDonorCount}人 (${(project.exclusiveDonorRatio * 100).toFixed(1)}%)`
+          );
+        }
+      });
+
+      const projectTrace = {
+        x: projectsX,
+        y: projectsY,
+        z: projectsZ,
+        mode: "markers+text",
+        type: "scatter3d",
+        marker: {
+          size: projectSizes,
+          color: "#0066FF",  // 青色
+          opacity: 0.9,
+          line: {
+            color: "#6699FF",
+            width: 2
+          }
+        },
+        text: projectNames,
+        textposition: "top center",
+        name: "プロジェクト",
+        hoverinfo: "text",
+        hovertext: projectHoverTexts
+      };
+
+      // ドナートレース（すべてのドナーを同じ色で表示）
+      const donorIds = donors.map(d => d.id);
+
+      const donorX = donorIds
+        .filter(id => positions[id])
+        .map(id => positions[id].x);
+
+      const donorY = donorIds
+        .filter(id => positions[id])
+        .map(id => positions[id].y);
+
+      const donorZ = donorIds
+        .filter(id => positions[id])
+        .map(id => positions[id].z);
+
+      const donorTrace = {
+        x: donorX,
+        y: donorY,
+        z: donorZ,
+        mode: "markers",
+        type: "scatter3d",
+        marker: {
+          size: 4,
+          color: "#FF0000",  // 赤色
+          opacity: 0.7
+        },
+        name: "寄付者",
+        hoverinfo: "skip"
+      };
+
+      // 寄付リンク（すべての寄付を同じ色で表示）
+      let edgeX = [], edgeY = [], edgeZ = [];
+
+      // すべての寄付（通常+不審）を処理
+      [...links, ...flaggedLinks].forEach(link => {
+        const sourcePos = positions[link.source];
+        const targetPos = positions[link.target];
+
+        if (!sourcePos || !targetPos) return;
+
+        edgeX.push(sourcePos.x, targetPos.x, null);
+        edgeY.push(sourcePos.y, targetPos.y, null);
+        edgeZ.push(sourcePos.z, targetPos.z, null);
+      });
+
+      const edgeTrace = {
+        x: edgeX,
+        y: edgeY,
+        z: edgeZ,
+        mode: "lines",
+        type: "scatter3d",
+        line: {
+          color: "#00CC00",  // 緑色
+          width: 2,
+          opacity: 0.5
+        },
+        name: "寄付",
+        hoverinfo: "skip"
+      };
+
+      // 全トレースを集める
+      const traces = [edgeTrace, projectTrace, donorTrace];
+
+      // レイアウト
+      const layout = {
+        scene: {
+          aspectmode: "cube",
+          camera: {
+            eye: { x: 1.5, y: 1.5, z: 1.5 }
+          },
+          xaxis: {
+            showgrid: true,
+            gridcolor: '#333',
+            tickfont: { color: '#fff' }
+          },
+          yaxis: {
+            showgrid: true,
+            gridcolor: '#333',
+            tickfont: { color: '#fff' }
+          },
+          zaxis: {
+            showgrid: true,
+            gridcolor: '#333',
+            tickfont: { color: '#fff' }
+          }
+        },
+        paper_bgcolor: "#000",
+        plot_bgcolor: "#000",
+        margin: { l: 0, r: 0, b: 0, t: 0 },
+        showlegend: true,
+        legend: {
+          x: 0,
+          y: 1,
+          font: { color: '#fff' }
+        },
+        autosize: true,
+        hoverlabel: {
+          bgcolor: '#333',
+          font: { color: '#fff', size: 14 }
+        }
+      };
+
+      // ローディング非表示
+      document.getElementById('loading').style.display = 'none';
+
+      // 描画
+      Plotly.newPlot('graph', traces, layout, {
+        responsive: true,
+        displayModeBar: true
+      });
+
+      // 実際に表示されているノード数を出力
+      console.log("実際に表示されているノード数:");
+      console.log(`表示されているプロジェクト数: ${projectsX.length}`);
+      console.log(`表示されている寄付者数: ${donorX.length}`);
+      console.log(`総ノード数: ${projectsX.length + donorX.length}`);
+    }
+
+    // ページロード時に実行
+    document.addEventListener('DOMContentLoaded', renderGraph);
+  </script>
+</body>
+</html>
