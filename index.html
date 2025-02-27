@@ -3,10 +3,31 @@
 
 <head>
     <meta charset="UTF-8" />
-    <title>DIGSHIBUYA QF Simulation Comparison</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DIGSHIBUYA QF Simulation Comparison - 通常QFとCOCM QFの比較</title>
+    <meta name="description" content="DIGSHIBUYAの寄付データを使用して、通常のQuadratic Funding（QF）とConnection-Oriented Cluster Matching QF（COCM QF）を比較するシミュレーション。多様性を重視するCOCM QFがどのように資金配分を改善するかを視覚的に理解できます。" />
+    <meta name="keywords" content="DIGSHIBUYA, Quadratic Funding, QF, COCM, Connection-Oriented Cluster Matching, 寄付, クラスタリング, 多様性, シミュレーション, 可視化" />
+    <meta name="author" content="DIGSHIBUYA" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- OGP設定 (SNSシェア用) -->
+    <meta property="og:title" content="DIGSHIBUYA QF Simulation Comparison - 通常QFとCOCM QFの比較" />
+    <meta property="og:description" content="DIGSHIBUYAの寄付データを使用して、通常のQFとCOCM QFを比較。多様性を重視するCOCM QFがどのように資金配分を改善するかを視覚的に理解できます。" />
+    <meta property="og:image" content="https://i.gyazo.com/8cbad85d56ff3a1675a989d6cc61de3e.png" />
+    <meta property="og:url" content="https://digshibuya.github.io/qf-cocm-simulation/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="DIGSHIBUYA QF Simulation" />
+    <meta property="og:locale" content="ja_JP" />
+
+    <!-- Twitter Card設定 -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="DIGSHIBUYA QF Simulation Comparison" />
+    <meta name="twitter:description" content="通常のQFとCOCM QFの比較シミュレーション。多様性を重視するCOCM QFの効果を可視化。" />
+    <meta name="twitter:image" content="https://i.gyazo.com/8cbad85d56ff3a1675a989d6cc61de3e.png" />
+
     <!--
     このアプリケーションについて:
-    寄付データを分析し、通常のQF（Quadratic Funding）とCOCM QF（Cross-Origin Contribution Matching QF）の
+    寄付データを分析し、通常のQF（Quadratic Funding）とCOCM QF（Connection-Oriented Cluster Matching QF）の
     比較シミュレーションを行います。寄付フロー、寄付者クラスタリング、資金配分の可視化を含みます。
     -->
     <style>
@@ -1420,26 +1441,46 @@ React.useEffect(() => {
 
                     <div className="info-box">
                         <h2 className="text-xl font-bold mb-2">このシミュレーションについて</h2>
-                        <p>このページでは、<span className="highlight">DIGSHIBUYA</span>の寄付データを使用して、<span className="highlight">通常のQF（Quadratic Funding）</span>と<span className="highlight">COCM QF（Connection-Oriented Cluster Matching QF）</span>の比較シミュレーションを行っています。</p>
+                        <p>このページでは、<span className="highlight">DIGSHIBUYA</span>の寄付データを使用して、<span className="highlight">通常のQF（Quadratic Funding）</span>と<span className="highlight">COCM QF（Connection-Oriented Cluster Matching QF）</span>の比較シミュレーションを行っています。このシミュレーションを通じて、コミュニティの多様性を重視するCOCM QFがどのように資金配分を改善するかを視覚的に理解できます。</p>
 
                         <h3 className="text-xl font-bold mt-4 mb-2">Quadratic Funding（QF）とは？</h3>
-                        <p>QFは公共財の資金調達メカニズムで、少額の寄付者からの支援を重視し、多くの人から支持されるプロジェクトに対してマッチングファンドを多く配分します。計算式は「寄付額の平方根の合計を二乗」することで、多くの小口寄付が大口寄付よりも効果的になります。</p>
+                        <p>QFは公共財の資金調達メカニズムで、少額の寄付者からの支援を重視し、多くの人から支持されるプロジェクトに対してマッチングファンドを多く配分します。計算式は「寄付額の平方根の合計を二乗」することで、多くの小口寄付が大口寄付よりも効果的になります。これにより、コミュニティの「声の大きさ」ではなく「声の数」が重視されます。</p>
 
                         <h3 className="text-xl font-bold mt-4 mb-2">COCM QF（Connection-Oriented Cluster Matching）とは？</h3>
-                        <p>COCMは通常のQFを拡張したもので、寄付者の多様性を重視します。寄付パターンに基づいて寄付者をクラスタリングし、多様なクラスターから支持を集めるプロジェクトに追加のボーナスを与えます。これにより、特定のコミュニティだけでなく、幅広いコミュニティから支持されるプロジェクトが優遇されます。</p>
+                        <p>COCMは通常のQFを拡張したもので、<span className="highlight">寄付者の多様性</span>を重視します。従来のQFでは、組織的な寄付行動（Sybil攻撃）や同質的なコミュニティによる集中的な支援が課題でした。COCMでは寄付パターンに基づいて寄付者をクラスタリングし、<span className="highlight">多様なクラスター（異なるコミュニティ）</span>から支持を集めるプロジェクトに追加のボーナスを与えます。</p>
+
+                        <p>COCMの主な特徴：</p>
+                        <ul style={{ marginLeft: "20px", listStyleType: "disc" }}>
+                            <li><span className="highlight">クラスタリング</span>：寄付パターンの類似性に基づいて寄付者をグループ化</li>
+                            <li><span className="highlight">多様性ボーナス</span>：異なるクラスターからの支持を集めるプロジェクトを優遇</li>
+                            <li><span className="highlight">コミュニティ間の架け橋</span>：異なるコミュニティをつなぐプロジェクトを促進</li>
+                            <li><span className="highlight">Sybil耐性の向上</span>：同質的なグループからの集中的な寄付の影響を軽減</li>
+                        </ul>
+
+                        <h3 className="text-xl font-bold mt-4 mb-2">COCMの計算方法</h3>
+                        <p>COCMでは、通常のQF計算に<span className="highlight">多様性係数</span>を組み込みます：</p>
+                        <ol style={{ marginLeft: "20px", listStyleType: "decimal" }}>
+                            <li>寄付者をクラスタリングしてグループ化（このシミュレーションでは3クラスタ）</li>
+                            <li>各プロジェクトが支援を受けた<span className="highlight">クラスターの数</span>をカウント</li>
+                            <li>クラスター数を総クラスター数で割って<span className="highlight">多様性係数</span>を計算</li>
+                            <li>通常のQFスコアに多様性係数を掛け、さらにボーナス（+0.5）を加えて最終スコアを算出</li>
+                            <li>マッチングプールを各プロジェクトの最終スコアに比例して配分</li>
+                        </ol>
 
                         <h3 className="text-xl font-bold mt-4 mb-2">このシミュレーションの見方</h3>
-                        <p>左側のパネルは<span className="highlight">通常のQF</span>、右側のパネルは<span className="highlight">COCM QF</span>の結果を表示しています。グラフや表を比較することで、多様性を重視するCOCM QFがどのようにプロジェクトへの資金配分を変化させるかを確認できます。</p>
+                        <p>左側のパネルは<span className="highlight">通常のQF</span>、右側のパネルは<span className="highlight">COCM QF</span>の結果を表示しています。グラフや表を比較することで、多様性を重視するCOCM QFがどのようにプロジェクトへの資金配分を変化させるかを確認できます。特に注目すべき点は、多様なコミュニティから支持を集めるプロジェクトがCOCMでより多くのマッチングファンドを受け取る傾向があることです。</p>
 
                         <p className="mt-4">詳細な可視化：</p>
                         <ul style={{ marginLeft: "20px", listStyleType: "disc" }}>
-                            <li>Sankey Diagram：寄付者からプロジェクトへの資金フローを表示</li>
-                            <li>3D Network：寄付者とプロジェクトの関係を3D空間で可視化</li>
-                            <li>Donor Clustering：寄付パターンに基づく寄付者のグループ化</li>
-                            <li>QF比較表：各プロジェクトの寄付者数、多様性係数、寄付総額、マッチング額を比較</li>
+                            <li><span className="highlight">Sankey Diagram</span>：寄付者からプロジェクトへの資金フローを表示</li>
+                            <li><span className="highlight">3D Network</span>：寄付者とプロジェクトの関係を3D空間で可視化。クラスター間の関係性が見えます</li>
+                            <li><span className="highlight">Donor Clustering</span>：寄付パターンに基づく寄付者のグループ化。同じ色の点は類似した寄付行動を示します</li>
+                            <li><span className="highlight">QF比較表</span>：各プロジェクトの寄付者数、多様性係数、寄付総額、マッチング額を比較</li>
                         </ul>
 
                         <p className="mt-4">より詳細なCOCMネットワーク可視化は<a href="cocm_network.html" target="_blank">こちら</a>をご覧ください。</p>
+
+                        <p className="mt-4">COCMについての詳細は<a href="https://www.gitcoin.co/blog/wtf-is-cluster-matching-qf" target="_blank">Gitcoinのブログ記事</a>や<a href="https://wtfiscocm.streamlit.app/COCM_Sandbox" target="_blank">COCMサンドボックス</a>をご覧ください。</p>
                     </div>
 
                     {isLoading ? (
