@@ -13,8 +13,8 @@
     <!-- OGP設定 (SNSシェア用) -->
     <meta property="og:title" content="DigDAO QF Simulation Comparison - 通常QFとCOCM QFの比較" />
     <meta property="og:description" content="DigDAOの寄付データを使用して、通常のQFとCOCM QFを比較。多様性を重視するCOCM QFがどのように資金配分を改善するかを視覚的に理解できます。" />
-    <meta property="og:image" content="https://i.gyazo.com/8cbad85d56ff3a1675a989d6cc61de3e.png" />
-    <meta property="og:url" content="https://DigDAO.github.io/qf-cocm-simulation/" />
+    <meta property="og:image" content="https://i.gyazo.com/ab9353bd6fe0e963c752728f925630c2.png" />
+    <meta property="og:url" content="https://tkgshn.github.io/DIGSHIBUYA_QF_COCM/digdao/index" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="DigDAO QF Simulation" />
     <meta property="og:locale" content="ja_JP" />
@@ -1435,13 +1435,6 @@ React.useEffect(() => {
             // ----------------- JSXレンダリング -----------------
             return (
                 <div className="p-6">
-                    <div style={{ textAlign: "center", marginBottom: "2rem" }}>
-                        <img
-                            src="https://assets.st-note.com/production/uploads/images/150107375/rectangle_large_type_2_8323dc73f253a1edab6cad48ddf7d25a.png?width=1200"
-                            alt="DigDAO QF Simulation"
-                            style={{ maxWidth: "100%", height: "auto" }}
-                        />
-                    </div>
                     <h1 className="text-3xl font-bold mb-4">
                         DigDAO QF Simulation Comparison
                     </h1>
@@ -1536,16 +1529,14 @@ React.useEffect(() => {
                             </div>
                             {/* Sankey Diagram */}
                             <div id="sankeyDiv"></div>
-                            {/* 3D Network Visualization */}
-                            <div>
-                                <h3 className="text-xl font-bold mb-2">COCM 3D Network Visualization</h3>
-                                <div id="network3dDiv" style={{ height: "800px", width: "100%" }}></div>
-                            </div>
-
-                            {/* Donor Clustering */}
-                            <div className="mt-6">
-                                <h3 className="text-xl font-bold mb-2">Donor Clustering (PCA + k-means)</h3>
-                                <div id="cluster2dDiv" style={{ height: "600px" }}></div>
+                            {/* 3D Network & 2D Clustering */}
+                            <div className="flex">
+                                <div className="half">
+                                    <div id="network3dDiv" style={{ height: "600px" }}></div>
+                                </div>
+                                <div className="half">
+                                    <div id="cluster2dDiv" style={{ height: "600px" }}></div>
+                                </div>
                             </div>
                             {/* QF Simulation Comparison */}
                             <h2 className="text-3xl font-bold mt-6">QF Simulation Comparison</h2>
